@@ -26,6 +26,10 @@ def normalize(raw: dict) -> dict:
 
     thash = (raw.get("hash") or raw.get("info_hash") or "").lower()
     magnet = raw.get("magnet") or raw.get("magnet_link") or ""
+    if not thash and magnet:
+        m = re.search(r"(?i)urn:btih:([a-z0-9]{32,40})", magnet)
+        if m:
+            thash = m.group(1).lower()
     if not magnet and thash:
         magnet = f"magnet:?xt=urn:btih:{thash}"
 
@@ -53,12 +57,21 @@ def normalize(raw: dict) -> dict:
 
 
 # ───────────────────────── זיהוי תכונות ─────────────────────────
+# זיהוי איכות לפי טוקנים מדויקים (גבולות-מילה), כדי לא ש-"HD" שב-HDTV/HDR
+# יזוהה בטעות כ-720p או "SD" שבתוך מילה אחרת כ-480p.
+_QUALITY_TOKENS = [
+    ("2160p", r"2160p|\buhd\b|\b4k\b"),
+    ("1080p", r"1080[pi]|\bfull\s?hd\b"),
+    ("720p", r"720p"),
+    ("480p", r"480p|\bdvdrip\b|\bsd\b"),
+]
+
+
 def detect_quality(name: str) -> str:
     low = name.lower()
-    for quality, patterns in config.QUALITY_PATTERNS.items():
-        for p in patterns:
-            if p in low:
-                return quality
+    for quality, pattern in _QUALITY_TOKENS:
+        if re.search(pattern, low):
+            return quality
     return "unknown"
 
 
@@ -82,17 +95,18 @@ def detect_category(name: str) -> str:
 
 def detect_language(name: str) -> str:
     low = name.lower()
-    langs = {
-        "he": ["hebrew", "heb", "עברית", "hebdub", "il"],
-        "en": ["english", "eng"],
-        "fr": ["french", "vff", "truefrench"],
-        "es": ["spanish", "castellano", "latino"],
-        "ru": ["russian", "rus"],
-    }
-    for code, kws in langs.items():
-        for kw in kws:
-            if kw in low:
-                return code
+    # דפוסי גבול-מילה — כדי ש-"il"/"heb"/"eng" לא ייתפסו בתוך מילים אחרות
+    # (למשל "film", "while"). עברית קודם.
+    langs = [
+        ("he", r"hebrew|\bheb\b|עברית|hebdub|\bhebsub\b"),
+        ("fr", r"french|\bvff\b|truefrench"),
+        ("es", r"spanish|castellano|latino"),
+        ("ru", r"russian|\brus\b"),
+        ("en", r"english|\beng\b"),
+    ]
+    for code, pattern in langs:
+        if re.search(pattern, low):
+            return code
     return "all"
 
 
@@ -108,8 +122,10 @@ def apply_filters(results, settings, extra=None):
 
     out = []
     for r in results:
-        # איכות
-        if f.get("quality", "all") != "all" and r["quality"] != f["quality"]:
+        # איכות — מסננים רק כשהאיכות *ידועה* ושונה. פריט עם איכות "unknown"
+        # לא נזרק, כדי לא לאבד תוצאות תקינות (סינון "מבין כוונה", לא נוקשה).
+        if (f.get("quality", "all") != "all"
+                and r["quality"] not in ("unknown", f["quality"])):
             continue
         # גודל מקסימלי
         max_gb = f.get("max_size_gb", 0)
