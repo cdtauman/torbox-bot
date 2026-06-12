@@ -36,27 +36,53 @@ async def _post(session, path, json_body=None, data_body=None):
         return data.get("data")
 
 
-# ───────────────────────── חיפוש ─────────────────────────
+# ───────────────────────── חיפוש (חלופה ציבורית) ─────────────────────────
 async def search(query: str, check_cache: bool = True):
     """
-    חיפוש טורנטים לפי שאילתה חופשית.
-    מחזיר רשימת תוצאות גולמית מ-TorBox.
+    חיפוש טורנטים דרך apibay (The Pirate Bay) כתחליף למנוע החיפוש החסום של TorBox.
+    עדיין מבצע בדיקת קאש מול שרתי TorBox לזיהוי הורדה מיידית.
     """
-    url = "https://search-api.torbox.app/torrents/search"
-    params = {"query": query}
-    if check_cache:
-        params["check_cache"] = "true"
-        params["check_owned"] = "true"
+    url = "https://apibay.org/q.php"
+    params = {"q": query}
+    
     async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=_headers(), params=params) as resp:
-            data = await resp.json(content_type=None)
-            if not data.get("success", False):
-                raise TorBoxError(data.get("detail") or data.get("error") or "שגיאה לא ידועה מ-TorBox")
-            res_data = data.get("data")
+        try:
+            async with session.get(url, params=params) as resp:
+                results = await resp.json(content_type=None)
+        except Exception:
+            raise TorBoxError("לא הצלחתי להתחבר למנוע החיפוש החלופי.")
             
-    if isinstance(res_data, dict):
-        return res_data.get("torrents") or res_data.get("results") or []
-    return res_data or []
+        if not isinstance(results, list):
+            return []
+            
+        # apibay returns {"id":"0","name":"No results returned"...} if empty
+        if len(results) == 1 and results[0].get("id") == "0":
+            return []
+            
+        # הגבלת כמות תוצאות למניעת עומס
+        results = results[:60]
+        
+        # בדיקת קאש ב-TorBox
+        if check_cache and results:
+            hashes = [r.get("info_hash") for r in results if r.get("info_hash")]
+            if hashes:
+                try:
+                    cached_data = await check_cached(hashes)
+                    # format=object returns a list or dict depending on TorBox API version
+                    if isinstance(cached_data, dict):
+                        for r in results:
+                            thash = r.get("info_hash", "").lower()
+                            if any(k.lower() == thash for k in cached_data.keys()):
+                                r["cached"] = True
+                    elif isinstance(cached_data, list):
+                        cached_hashes = [item.get("hash", "").lower() for item in cached_data]
+                        for r in results:
+                            if r.get("info_hash", "").lower() in cached_hashes:
+                                r["cached"] = True
+                except Exception:
+                    pass  # מתעלם משגיאות קאש ומחזיר תוצאות בכל מקרה
+                    
+        return results
 
 
 # ───────────────────────── הורדה ─────────────────────────
