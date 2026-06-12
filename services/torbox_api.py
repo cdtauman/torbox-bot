@@ -82,6 +82,11 @@ async def search(query: str, check_cache: bool = True):
     """
     results = []
     
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json"
+    }
+    
     # זיהוי עונה ופרק
     match = re.search(r'(?i)s(\d{1,2})\s*e(\d{1,2})', query)
     async with aiohttp.ClientSession() as session:
@@ -93,36 +98,44 @@ async def search(query: str, check_cache: bool = True):
             
             c_url = f"https://v3-cinemeta.strem.io/catalog/series/top/search={clean_query}.json"
             try:
-                async with session.get(c_url) as resp:
-                    c_data = await resp.json(content_type=None)
-                    metas = c_data.get("metas", [])
-                    if metas:
-                        imdb_id = metas[0].get("imdb_id")
-                        if imdb_id:
-                            t_url = f"https://torrentio.strem.fun/stream/series/{imdb_id}:{season}:{episode}.json"
-                            async with session.get(t_url) as t_resp:
-                                t_data = await t_resp.json(content_type=None)
-                                streams = t_data.get("streams", [])
-                                if streams:
-                                    results = _parse_torrentio(streams)
+                async with session.get(c_url, headers=headers) as resp:
+                    if resp.status == 200:
+                        c_data = await resp.json(content_type=None)
+                        metas = c_data.get("metas", [])
+                        if metas:
+                            imdb_id = metas[0].get("imdb_id")
+                            if imdb_id:
+                                t_url = f"https://torrentio.strem.fun/stream/series/{imdb_id}:{season}:{episode}.json"
+                                async with session.get(t_url, headers=headers) as t_resp:
+                                    if t_resp.status == 200:
+                                        t_data = await t_resp.json(content_type=None)
+                                        streams = t_data.get("streams", [])
+                                        if streams:
+                                            results = _parse_torrentio(streams)
+                                    else:
+                                        logger.error(f"Torrentio returned {t_resp.status}: {await t_resp.text()}")
             except Exception as e:
                 logger.error(f"Torrentio series search failed: {e}")
         else:
             # --- חיפוש סרט ב-Torrentio ---
             c_url = f"https://v3-cinemeta.strem.io/catalog/movie/top/search={query}.json"
             try:
-                async with session.get(c_url) as resp:
-                    c_data = await resp.json(content_type=None)
-                    metas = c_data.get("metas", [])
-                    if metas:
-                        imdb_id = metas[0].get("imdb_id")
-                        if imdb_id:
-                            t_url = f"https://torrentio.strem.fun/stream/movie/{imdb_id}.json"
-                            async with session.get(t_url) as t_resp:
-                                t_data = await t_resp.json(content_type=None)
-                                streams = t_data.get("streams", [])
-                                if streams:
-                                    results = _parse_torrentio(streams)
+                async with session.get(c_url, headers=headers) as resp:
+                    if resp.status == 200:
+                        c_data = await resp.json(content_type=None)
+                        metas = c_data.get("metas", [])
+                        if metas:
+                            imdb_id = metas[0].get("imdb_id")
+                            if imdb_id:
+                                t_url = f"https://torrentio.strem.fun/stream/movie/{imdb_id}.json"
+                                async with session.get(t_url, headers=headers) as t_resp:
+                                    if t_resp.status == 200:
+                                        t_data = await t_resp.json(content_type=None)
+                                        streams = t_data.get("streams", [])
+                                        if streams:
+                                            results = _parse_torrentio(streams)
+                                    else:
+                                        logger.error(f"Torrentio returned {t_resp.status}: {await t_resp.text()}")
             except Exception as e:
                 logger.error(f"Torrentio movie search failed: {e}")
 
@@ -131,7 +144,7 @@ async def search(query: str, check_cache: bool = True):
             url = "https://torrents-csv.com/service/search"
             params = {"q": query, "size": 50}
             try:
-                async with session.get(url, params=params) as resp:
+                async with session.get(url, params=params, headers=headers) as resp:
                     if resp.status == 200:
                         data = await resp.json(content_type=None)
                         csv_results = data.get("torrents", [])
