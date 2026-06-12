@@ -81,18 +81,24 @@ async def _render_results(message, context, page=0):
     all_results = context.user_data.get("all_results", [])
 
     filtered = parser.apply_filters(all_results, settings, temp)
+
+    # רשת ביטחון: אם הסינון מחק הכל אבל יש תוצאות גולמיות — מציגים את כולן
+    # (עדיף תוצאות עם הערה מאשר מסך ריק). זה ה"דינמי, לא נוקשה" שביקשת.
+    filters_dropped_all = bool(all_results) and not filtered
+    if filters_dropped_all:
+        filtered = list(all_results)
+
     filtered = parser.apply_sort(
         filtered,
         sort_by=temp.get("sort_by", settings.get("sort_by", "seeders")),
         desc=bool(temp.get("sort_desc", settings.get("sort_desc", 1))),
     )
     context.user_data["filtered"] = filtered
-    logger.debug(f"[RENDER] query={context.user_data.get('query')!r} | all={len(all_results)} | filtered={len(filtered)} | page={page}")
+    logger.debug(f"[RENDER] query={context.user_data.get('query')!r} | all={len(all_results)} | filtered={len(filtered)} | page={page} | fallback={filters_dropped_all}")
 
     if not filtered:
         await message.edit_text(
-            "😕 אין תוצאות שמתאימות לסינון הנוכחי.\n"
-            "נסה לשנות את הסינון.",
+            "😕 לא נמצאו תוצאות.",
             parse_mode="HTML", reply_markup=kb.results_keyboard([], 0, 1, 0))
         return
 
