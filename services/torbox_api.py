@@ -36,10 +36,87 @@ async def _post(session, path, json_body=None, data_body=None):
         return data.get("data")
 
 
-# ───────────────────────── חיפוש (Stremio Addon + TorrentsCSV) ─────────────────────────
+# ───────────────────────── חיפוש (Jackett — מקומי, ללא חסימות) ─────────────────────────
 import logging
 import re
+import os
 logger = logging.getLogger(__name__)
+
+JACKETT_URL = os.getenv("JACKETT_URL", "http://localhost:9117")
+JACKETT_KEY = os.getenv("JACKETT_API_KEY", "")
+
+async def search(query: str, check_cache: bool = True):
+    """
+    חיפוש דרך Jackett — שרות מקומי שרץ על אותו שרת.
+    אין Cloudflare, אין חסימות IP.
+    """
+    if not JACKETT_KEY:
+        logger.error("JACKETT_API_KEY not set in .env")
+        return []
+
+    url = f"{JACKETT_URL}/api/v2.0/indexers/all/results"
+    params = {
+        "apikey": JACKETT_KEY,
+        "Query": query,
+    }
+
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                if resp.status != 200:
+                    logger.error(f"Jackett returned {resp.status}: {await resp.text()}")
+                    return []
+                data = await resp.json(content_type=None)
+        except Exception as e:
+            logger.error(f"Jackett search failed: {e}")
+            return []
+
+    raw = data.get("Results", [])
+    if not raw:
+        return []
+
+    results = []
+    for r in raw:
+        info_hash = r.get("InfoHash") or ""
+        magnet = r.get("MagnetUri") or ""
+        # אם אין hash, ננסה לחלץ מה-magnet
+        if not info_hash and "urn:btih:" in magnet:
+            info_hash = re.search(r"urn:btih:([a-fA-F0-9]{40})", magnet)
+            info_hash = info_hash.group(1) if info_hash else ""
+
+        results.append({
+            "info_hash": info_hash.lower(),
+            "name": r.get("Title", "Unknown"),
+            "size": r.get("Size", 0),
+            "seeders": r.get("Seeders", 0),
+            "leechers": r.get("Peers", 0),
+            "magnet": magnet,
+        })
+
+    # מיון לפי seeders
+    results.sort(key=lambda x: x.get("seeders", 0), reverse=True)
+    results = results[:60]
+
+    # בדיקת קאש ב-TorBox
+    if check_cache and results:
+        hashes = [r["info_hash"] for r in results if r.get("info_hash")]
+        if hashes:
+            try:
+                cached_data = await check_cached(hashes)
+                if isinstance(cached_data, dict):
+                    for r in results:
+                        if any(k.lower() == r["info_hash"] for k in cached_data.keys()):
+                            r["cached"] = True
+                elif isinstance(cached_data, list):
+                    cached_hashes = {item.get("hash", "").lower() for item in cached_data}
+                    for r in results:
+                        if r["info_hash"] in cached_hashes:
+                            r["cached"] = True
+            except Exception:
+                pass
+
+    return results
+
 
 def _parse_torrentio(streams):
     """מנרמל תוצאות מ-Torrentio למבנה שהבוט מצפה לו"""
