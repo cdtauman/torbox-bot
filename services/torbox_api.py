@@ -37,6 +37,9 @@ async def _post(session, path, json_body=None, data_body=None):
 
 
 # ───────────────────────── חיפוש (חלופה ציבורית - SolidTorrents) ─────────────────────────
+import logging
+logger = logging.getLogger(__name__)
+
 async def search(query: str, check_cache: bool = True):
     """
     חיפוש טורנטים דרך SolidTorrents כתחליף למנוע החיפוש החסום של TorBox.
@@ -48,10 +51,15 @@ async def search(query: str, check_cache: bool = True):
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(url, params=params) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    logger.error(f"SolidTorrents returned {resp.status}: {text}")
+                    raise Exception(f"HTTP {resp.status} - {text[:100]}")
                 data = await resp.json(content_type=None)
                 results = data.get("results", [])
-        except Exception:
-            raise TorBoxError("לא הצלחתי להתחבר למנוע החיפוש החלופי.")
+        except Exception as e:
+            logger.exception(f"Error connecting to SolidTorrents: {e}")
+            raise TorBoxError(f"שגיאת תקשורת מול מנוע החיפוש: {e}")
             
         if not isinstance(results, list):
             return []
