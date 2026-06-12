@@ -36,64 +36,141 @@ async def _post(session, path, json_body=None, data_body=None):
         return data.get("data")
 
 
-# ───────────────────────── חיפוש (חלופה ציבורית - TorrentsCSV) ─────────────────────────
+# ───────────────────────── חיפוש (Stremio Addon + TorrentsCSV) ─────────────────────────
 import logging
+import re
 logger = logging.getLogger(__name__)
+
+def _parse_torrentio(streams):
+    """מנרמל תוצאות מ-Torrentio למבנה שהבוט מצפה לו"""
+    results = []
+    for s in streams:
+        if "infoHash" not in s:
+            continue
+        title = s.get("title", "")
+        name = title.split("\n")[0] if title else s.get("name", "Unknown")
+        
+        size_bytes = 0
+        seeders = 0
+        
+        match_seed = re.search(r'👤\s*(\d+)', title)
+        if match_seed: 
+            seeders = int(match_seed.group(1))
+            
+        match_size = re.search(r'💾\s*([\d\.]+)\s*(GB|MB|KB)', title)
+        if match_size:
+            val = float(match_size.group(1))
+            unit = match_size.group(2)
+            if unit == "GB": size_bytes = int(val * 1024**3)
+            elif unit == "MB": size_bytes = int(val * 1024**2)
+            elif unit == "KB": size_bytes = int(val * 1024)
+            
+        results.append({
+            "info_hash": s.get("infoHash"),
+            "name": name,
+            "size": size_bytes,
+            "seeders": seeders,
+            "leechers": 0
+        })
+    return results
 
 async def search(query: str, check_cache: bool = True):
     """
-    חיפוש טורנטים דרך Torrents-CSV כתחליף למנוע החיפוש החסום של TorBox.
-    מנוע זה אינו חוסם שרתי VPS עם Cloudflare.
+    חיפוש משולב:
+    מנסה תחילה להשתמש ב-Torrentio (כמו ב-Stremio) דרך Cinemeta.
+    אם אין תוצאות או אם אין עונה/פרק בסדרה, נופל ל-TorrentsCSV.
     """
-    url = "https://torrents-csv.com/service/search"
-    params = {"q": query, "size": 50}
+    results = []
     
+    # זיהוי עונה ופרק
+    match = re.search(r'(?i)s(\d{1,2})\s*e(\d{1,2})', query)
     async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(url, params=params) as resp:
-                if resp.status != 200:
-                    text = await resp.text()
-                    logger.error(f"TorrentsCSV returned {resp.status}: {text[:200]}")
-                    raise Exception(f"HTTP {resp.status}")
-                data = await resp.json(content_type=None)
-                results = data.get("torrents", [])
-        except Exception as e:
-            logger.exception(f"Error connecting to TorrentsCSV: {e}")
-            raise TorBoxError("מנוע החיפוש אינו זמין כרגע. אנא נסה שוב מאוחר יותר.")
+        if match:
+            # --- חיפוש סדרה ב-Torrentio ---
+            season = int(match.group(1))
+            episode = int(match.group(2))
+            clean_query = re.sub(r'(?i)s\d{1,2}\s*e\d{1,2}', '', query).strip()
             
-        if not isinstance(results, list):
-            return []
-            
-        # התאמת שדות למבנה ש-parser.py מצפה לו
-        for r in results:
-            if "infohash" in r and "info_hash" not in r:
-                r["info_hash"] = r["infohash"]
-            if "size_bytes" in r and "size" not in r:
-                r["size"] = r["size_bytes"]
-            
-        # הגבלת כמות תוצאות
-        results = results[:60]
-        
-        # בדיקת קאש ב-TorBox
-        if check_cache and results:
-            hashes = [r.get("info_hash") for r in results if r.get("info_hash")]
-            if hashes:
-                try:
-                    cached_data = await check_cached(hashes)
-                    if isinstance(cached_data, dict):
-                        for r in results:
-                            thash = r.get("info_hash", "").lower()
-                            if any(k.lower() == thash for k in cached_data.keys()):
-                                r["cached"] = True
-                    elif isinstance(cached_data, list):
-                        cached_hashes = [item.get("hash", "").lower() for item in cached_data]
-                        for r in results:
-                            if r.get("info_hash", "").lower() in cached_hashes:
-                                r["cached"] = True
-                except Exception:
-                    pass  # מתעלם משגיאות קאש ומחזיר תוצאות בכל מקרה
-                    
-        return results
+            c_url = f"https://v3-cinemeta.strem.io/catalog/series/top/search={clean_query}.json"
+            try:
+                async with session.get(c_url) as resp:
+                    c_data = await resp.json(content_type=None)
+                    metas = c_data.get("metas", [])
+                    if metas:
+                        imdb_id = metas[0].get("imdb_id")
+                        if imdb_id:
+                            t_url = f"https://torrentio.strem.fun/stream/series/{imdb_id}:{season}:{episode}.json"
+                            async with session.get(t_url) as t_resp:
+                                t_data = await t_resp.json(content_type=None)
+                                streams = t_data.get("streams", [])
+                                if streams:
+                                    results = _parse_torrentio(streams)
+            except Exception as e:
+                logger.error(f"Torrentio series search failed: {e}")
+        else:
+            # --- חיפוש סרט ב-Torrentio ---
+            c_url = f"https://v3-cinemeta.strem.io/catalog/movie/top/search={query}.json"
+            try:
+                async with session.get(c_url) as resp:
+                    c_data = await resp.json(content_type=None)
+                    metas = c_data.get("metas", [])
+                    if metas:
+                        imdb_id = metas[0].get("imdb_id")
+                        if imdb_id:
+                            t_url = f"https://torrentio.strem.fun/stream/movie/{imdb_id}.json"
+                            async with session.get(t_url) as t_resp:
+                                t_data = await t_resp.json(content_type=None)
+                                streams = t_data.get("streams", [])
+                                if streams:
+                                    results = _parse_torrentio(streams)
+            except Exception as e:
+                logger.error(f"Torrentio movie search failed: {e}")
+
+        # --- Fallback: Torrents-CSV ---
+        if not results:
+            url = "https://torrents-csv.com/service/search"
+            params = {"q": query, "size": 50}
+            try:
+                async with session.get(url, params=params) as resp:
+                    if resp.status == 200:
+                        data = await resp.json(content_type=None)
+                        csv_results = data.get("torrents", [])
+                        if isinstance(csv_results, list):
+                            for r in csv_results:
+                                if "infohash" in r and "info_hash" not in r:
+                                    r["info_hash"] = r["infohash"]
+                                if "size_bytes" in r and "size" not in r:
+                                    r["size"] = r["size_bytes"]
+                            results = csv_results
+            except Exception as e:
+                logger.error(f"TorrentsCSV search failed: {e}")
+
+    if not results:
+        return []
+
+    # הגבלת כמות תוצאות
+    results = results[:60]
+    
+    # בדיקת קאש ב-TorBox
+    if check_cache and results:
+        hashes = [r.get("info_hash") for r in results if r.get("info_hash")]
+        if hashes:
+            try:
+                cached_data = await check_cached(hashes)
+                if isinstance(cached_data, dict):
+                    for r in results:
+                        thash = r.get("info_hash", "").lower()
+                        if any(k.lower() == thash for k in cached_data.keys()):
+                            r["cached"] = True
+                elif isinstance(cached_data, list):
+                    cached_hashes = [item.get("hash", "").lower() for item in cached_data]
+                    for r in results:
+                        if r.get("info_hash", "").lower() in cached_hashes:
+                            r["cached"] = True
+            except Exception:
+                pass  # מתעלם משגיאות קאש
+                
+    return results
 
 
 # ───────────────────────── הורדה ─────────────────────────
