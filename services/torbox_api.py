@@ -36,28 +36,30 @@ async def _post(session, path, json_body=None, data_body=None):
         return data.get("data")
 
 
-# ───────────────────────── חיפוש (חלופה ציבורית) ─────────────────────────
+# ───────────────────────── חיפוש (חלופה ציבורית - SolidTorrents) ─────────────────────────
 async def search(query: str, check_cache: bool = True):
     """
-    חיפוש טורנטים דרך apibay (The Pirate Bay) כתחליף למנוע החיפוש החסום של TorBox.
+    חיפוש טורנטים דרך SolidTorrents כתחליף למנוע החיפוש החסום של TorBox.
     עדיין מבצע בדיקת קאש מול שרתי TorBox לזיהוי הורדה מיידית.
     """
-    url = "https://apibay.org/q.php"
+    url = "https://solidtorrents.to/api/v1/search"
     params = {"q": query}
     
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(url, params=params) as resp:
-                results = await resp.json(content_type=None)
+                data = await resp.json(content_type=None)
+                results = data.get("results", [])
         except Exception:
             raise TorBoxError("לא הצלחתי להתחבר למנוע החיפוש החלופי.")
             
         if not isinstance(results, list):
             return []
             
-        # apibay returns {"id":"0","name":"No results returned"...} if empty
-        if len(results) == 1 and results[0].get("id") == "0":
-            return []
+        # מתאים את שם השדה hash כדי ש-parser.py יזהה אותו
+        for r in results:
+            if "infohash" in r and "info_hash" not in r:
+                r["info_hash"] = r["infohash"]
             
         # הגבלת כמות תוצאות למניעת עומס
         results = results[:60]
