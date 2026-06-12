@@ -78,9 +78,17 @@ async def search(query: str, check_cache: bool = True):
     """
     חיפוש משולב:
     מנסה תחילה להשתמש ב-Torrentio (כמו ב-Stremio) דרך Cinemeta.
+    כדי לעקוף את החסימות של Cloudflare, אנו משתמשים ב-curl_cffi כדי להתחזות לדפדפן כרום.
     אם אין תוצאות או אם אין עונה/פרק בסדרה, נופל ל-TorrentsCSV.
     """
     results = []
+    
+    # מנסה לייבא curl_cffi לצורך עקיפת Cloudflare
+    try:
+        from curl_cffi.requests import AsyncSession as CFFISession
+    except ImportError:
+        logger.error("curl_cffi not installed! Torrentio search might fail due to Cloudflare.")
+        CFFISession = None
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -89,6 +97,20 @@ async def search(query: str, check_cache: bool = True):
     
     # זיהוי עונה ופרק
     match = re.search(r'(?i)s(\d{1,2})\s*e(\d{1,2})', query)
+    
+    # פונקציית עזר להוצאת בקשות ל-Torrentio בעזרת הדמיית דפדפן
+    async def fetch_torrentio(url):
+        if CFFISession:
+            try:
+                async with CFFISession(impersonate="chrome") as session:
+                    resp = await session.get(url, timeout=10)
+                    if resp.status_code == 200:
+                        return resp.json()
+                    logger.error(f"Torrentio (curl_cffi) returned {resp.status_code}: {resp.text[:100]}")
+            except Exception as e:
+                logger.error(f"Torrentio curl_cffi request failed: {e}")
+        return None
+
     async with aiohttp.ClientSession() as session:
         if match:
             # --- חיפוש סדרה ב-Torrentio ---
@@ -106,14 +128,11 @@ async def search(query: str, check_cache: bool = True):
                             imdb_id = metas[0].get("imdb_id")
                             if imdb_id:
                                 t_url = f"https://torrentio.strem.fun/stream/series/{imdb_id}:{season}:{episode}.json"
-                                async with session.get(t_url, headers=headers) as t_resp:
-                                    if t_resp.status == 200:
-                                        t_data = await t_resp.json(content_type=None)
-                                        streams = t_data.get("streams", [])
-                                        if streams:
-                                            results = _parse_torrentio(streams)
-                                    else:
-                                        logger.error(f"Torrentio returned {t_resp.status}: {await t_resp.text()}")
+                                t_data = await fetch_torrentio(t_url)
+                                if t_data:
+                                    streams = t_data.get("streams", [])
+                                    if streams:
+                                        results = _parse_torrentio(streams)
             except Exception as e:
                 logger.error(f"Torrentio series search failed: {e}")
         else:
@@ -128,14 +147,11 @@ async def search(query: str, check_cache: bool = True):
                             imdb_id = metas[0].get("imdb_id")
                             if imdb_id:
                                 t_url = f"https://torrentio.strem.fun/stream/movie/{imdb_id}.json"
-                                async with session.get(t_url, headers=headers) as t_resp:
-                                    if t_resp.status == 200:
-                                        t_data = await t_resp.json(content_type=None)
-                                        streams = t_data.get("streams", [])
-                                        if streams:
-                                            results = _parse_torrentio(streams)
-                                    else:
-                                        logger.error(f"Torrentio returned {t_resp.status}: {await t_resp.text()}")
+                                t_data = await fetch_torrentio(t_url)
+                                if t_data:
+                                    streams = t_data.get("streams", [])
+                                    if streams:
+                                        results = _parse_torrentio(streams)
             except Exception as e:
                 logger.error(f"Torrentio movie search failed: {e}")
 
