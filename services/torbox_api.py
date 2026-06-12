@@ -36,59 +36,36 @@ async def _post(session, path, json_body=None, data_body=None):
         return data.get("data")
 
 
-# ───────────────────────── חיפוש (Jackett — מקומי, ללא חסימות) ─────────────────────────
-import logging
-import re
-import os
-logger = logging.getLogger(__name__)
-
-JACKETT_URL = os.getenv("JACKETT_URL", "http://localhost:9117")
-JACKETT_KEY = os.getenv("JACKETT_API_KEY", "")
-
-async def search(query: str, check_cache: bool = True):
-    """
-    חיפוש דרך Jackett — שרות מקומי שרץ על אותו שרת.
-    אין Cloudflare, אין חסימות IP.
-    """
-    if not JACKETT_KEY:
-        logger.error("JACKETT_API_KEY not set in .env")
-        return []
-
+# ───────────────────────── חיפוש (Jackett — מקומי, ללא חסימות) ────────────────────�async def _jackett_fetch(session, params: dict) -> list:
+    """פונקציית עזר: שולח בקשה לJackett ומחזיר רשימת Results."""
     url = f"{JACKETT_URL}/api/v2.0/indexers/all/results"
-    params = {
-        "apikey": JACKETT_KEY,
-        "Query": query,
-    }
-
-    async with aiohttp.ClientSession() as session:
-        try:
-            logger.debug(f"[JACKETT] GET {url} | query={query!r}")
-            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=20)) as resp:
-                logger.debug(f"[JACKETT] Response status={resp.status}")
-                if resp.status != 200:
-                    body = await resp.text()
-                    logger.error(f"[JACKETT] HTTP {resp.status}: {body[:300]}")
-                    return []
-                data = await resp.json(content_type=None)
-        except Exception as e:
-            logger.error(f"[JACKETT] Request failed: {type(e).__name__}: {e}")
-            return []
-
-    raw = data.get("Results", [])
-    logger.info(f"[JACKETT] Raw results: {len(raw)} items")
-    if not raw:
-        logger.warning(f"[JACKETT] No results from Jackett for query={query!r}")
+    full_params = {"apikey": JACKETT_KEY, **params}
+    try:
+        logger.debug(f"[JACKETT] GET params={params}")
+        async with session.get(url, params=full_params, timeout=aiohttp.ClientTimeout(total=25)) as resp:
+            logger.debug(f"[JACKETT] Response status={resp.status}")
+            if resp.status != 200:
+                body = await resp.text()
+                logger.error(f"[JACKETT] HTTP {resp.status}: {body[:300]}")
+                return []
+            data = await resp.json(content_type=None)
+            results = data.get("Results", [])
+            logger.info(f"[JACKETT] Got {len(results)} raw results for params={params}")
+            return results
+    except Exception as e:
+        logger.error(f"[JACKETT] Request failed: {type(e).__name__}: {e}")
         return []
 
+
+def _parse_raw(raw_list: list) -> list:
+    """ממיר תוצאות גולמיות מJackett למבנה אחיד."""
     results = []
-    for r in raw:
+    for r in raw_list:
         info_hash = r.get("InfoHash") or ""
         magnet = r.get("MagnetUri") or ""
-        # אם אין hash, ננסה לחלץ מה-magnet
         if not info_hash and "urn:btih:" in magnet:
-            info_hash = re.search(r"urn:btih:([a-fA-F0-9]{40})", magnet)
-            info_hash = info_hash.group(1) if info_hash else ""
-
+            m = re.search(r"urn:btih:([a-fA-F0-9]{40})", magnet)
+            info_hash = m.group(1) if m else ""
         results.append({
             "info_hash": info_hash.lower(),
             "name": r.get("Title", "Unknown"),
@@ -97,8 +74,70 @@ async def search(query: str, check_cache: bool = True):
             "leechers": r.get("Peers", 0),
             "magnet": magnet,
         })
+    return results
 
-    # מיון לפי seeders
+
+async def search(query: str, check_cache: bool = True):
+    """
+    חיפוש דרך Jackett עם זיהוי חכם של סדרות/סרטים.
+
+    לסדרות (SxxExx): משתמש ב-t=tvsearch עם season/ep נפרדים —
+    זה האופן הנכון ב-Torznab שמניב הרבה יותר תוצאות.
+    לסרטים/חיפוש כללי: t=search רגיל.
+    """
+    if not JACKETT_KEY:
+        logger.error("JACKETT_API_KEY not set in .env")
+        return []
+
+    # זיהוי SxxExx (למשל S05E06 או s5e6)
+    tv_match = re.search(r'(?i)\bS(\d{1,2})[\s._-]?E(\d{1,2})\b', query)
+
+    raw = []
+    async with aiohttp.ClientSession() as session:
+        if tv_match:
+            season = int(tv_match.group(1))
+            episode = int(tv_match.group(2))
+            # שם הסדרה בלבד (בלי SxxExx)
+            show_name = re.sub(r'(?i)\bS\d{1,2}[\s._-]?E\d{1,2}\b', '', query).strip()
+            logger.info(f"[JACKETT] TV search | show={show_name!r} S{season:02d}E{episode:02d}")
+
+            # חיפוש tvsearch עם עונה+פרק — הדרך הנכונה
+            tv_raw = await _jackett_fetch(session, {
+                "t": "tvsearch",
+                "q": show_name,
+                "season": season,
+                "ep": episode,
+            })
+            raw.extend(tv_raw)
+
+            # fallback: חיפוש כללי עם השאילתה המלאה (SxxExx כמחרוזת)
+            if len(raw) < 5:
+                logger.info("[JACKETT] tvsearch gave few results, trying general search fallback")
+                gen_raw = await _jackett_fetch(session, {
+                    "t": "search",
+                    "Query": f"{show_name} S{season:02d}E{episode:02d}",
+                })
+                # מיזוג ללא כפילויות
+                existing_hashes = {r.get("InfoHash", "").lower() for r in raw}
+                for r in gen_raw:
+                    if r.get("InfoHash", "").lower() not in existing_hashes:
+                        raw.append(r)
+        else:
+            # חיפוש כללי (סרט / משחק / תוכנה / שם בלבד)
+            logger.info(f"[JACKETT] General search | query={query!r}")
+            raw = await _jackett_fetch(session, {
+                "t": "search",
+                "Query": query,
+            })
+
+    logger.info(f"[JACKETT] Total raw after all searches: {len(raw)}")
+    if not raw:
+        logger.warning(f"[JACKETT] No results at all for query={query!r}")
+        return []
+
+    results = _parse_raw(raw)
+
+    # מיון לפי seeders, הגבלה ל-60
     results.sort(key=lambda x: x.get("seeders", 0), reverse=True)
     results = results[:60]
     logger.info(f"[JACKETT] After processing: {len(results)} results (top 60 by seeders)")
@@ -115,6 +154,15 @@ async def search(query: str, check_cache: bool = True):
                             r["cached"] = True
                 elif isinstance(cached_data, list):
                     cached_hashes = {item.get("hash", "").lower() for item in cached_data}
+                    for r in results:
+                        if r["info_hash"] in cached_hashes:
+                            r["cached"] = True
+            except Exception:
+                pass
+
+    return results
+
+= {item.get("hash", "").lower() for item in cached_data}
                     for r in results:
                         if r["info_hash"] in cached_hashes:
                             r["cached"] = True
