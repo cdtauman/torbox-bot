@@ -19,6 +19,14 @@ OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 TORBOX_BASE_URL = "https://api.torbox.app"
 TORBOX_API_VERSION = "v1"
 
+# מנוע החיפוש הרשמי של TorBox (Orion, ~109M לינקים, תוצאות cached).
+# חינמי לחשבונות מנוי; מחזיר 429 "0 per minute" לחשבון ניסיון/בלי מנוי.
+TORBOX_SEARCH_URL = "https://search-api.torbox.app"
+
+# כמה תוצאות "מספיק" כדי להפסיק להרחיב את השאילתה, וכמה לשמור בסוף.
+SEARCH_ENOUGH = 15
+SEARCH_LIMIT = 60
+
 # ───────────────────────── בסיס נתונים ─────────────────────────
 DB_PATH = os.getenv("DB_PATH", "torbox_bot.db")
 

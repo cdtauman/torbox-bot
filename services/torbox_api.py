@@ -1,12 +1,27 @@
 """
-services/torbox_api.py — עטיפה אסינכרונית ל-TorBox API
-Endpoints רשמיים: https://api-docs.torbox.app
+services/torbox_api.py — עטיפה אסינכרונית ל-TorBox API.
+
+חיפוש: מנוע החיפוש הרשמי של TorBox — search-api.torbox.app (Orion).
+        אמין, מתארח אצל TorBox (אין חסימות Cloudflare/IP כמו ב-Jackett מקומי),
+        תוצאות cached, ומחזיר את השדות ש-services/parser.py כבר יודע לנרמל.
+הורדה/רשימה/שליטה: ה-API הראשי — api.torbox.app/v1/api.
+
+Docs: https://api-docs.torbox.app , https://search-api.torbox.app
 """
+import re
+import logging
+
 import aiohttp
 
 import config
 
+logger = logging.getLogger(__name__)
+
 BASE = f"{config.TORBOX_BASE_URL}/{config.TORBOX_API_VERSION}/api"
+SEARCH_BASE = config.TORBOX_SEARCH_URL.rstrip("/")
+
+# זמן המתנה לבקשת חיפוש בודדת
+_SEARCH_TIMEOUT = aiohttp.ClientTimeout(total=25)
 
 
 class TorBoxError(Exception):
@@ -36,143 +51,111 @@ async def _post(session, path, json_body=None, data_body=None):
         return data.get("data")
 
 
-# ───────────────────────── חיפוש (Jackett — מקומי, ללא חסימות) ────────────────────�async def _jackett_fetch(session, params: dict) -> list:
-    """פונקציית עזר: שולח בקשה לJackett ומחזיר רשימת Results."""
-    url = f"{JACKETT_URL}/api/v2.0/indexers/all/results"
-    full_params = {"apikey": JACKETT_KEY, **params}
+# ───────────────────────── חיפוש (TorBox Search API) ─────────────────────────
+_SXXEXX = re.compile(r'(?i)\bS(\d{1,2})[\s._-]?E(\d{1,3})\b')
+_SXX = re.compile(r'(?i)\bS(\d{1,2})\b')
+
+
+def _query_variants(query: str) -> list:
+    """
+    בונה רשימת ניסוחים מהמדויק לרחב — כדי "להבין כוונה" ולא להיתקע על טקסט מדויק.
+    דוגמה: 'Welcome to Wrexham S05E06' →
+        ['Welcome to Wrexham S05E06', 'Welcome to Wrexham S05', 'Welcome to Wrexham']
+    התוצאות ממוזגות, כך שגם פרק בודד וגם חבילת-עונה יופיעו.
+    """
+    q = query.strip()
+    variants = [q]
+
+    m = _SXXEXX.search(q)
+    if m:
+        season = int(m.group(1))
+        title = _SXXEXX.sub("", q).strip(" .-_")
+        # חבילת עונה (S05) ושם נקי — מה שמצאת שמחזיר תוצאות גם כשהפרק לא
+        variants.append(f"{title} S{season:02d}")
+        variants.append(title)
+    else:
+        m2 = _SXX.search(q)
+        if m2:
+            title = _SXX.sub("", q).strip(" .-_")
+            if title:
+                variants.append(title)
+
+    # הסרת כפילויות תוך שמירת סדר
+    seen, out = set(), []
+    for v in variants:
+        key = v.lower()
+        if v and key not in seen:
+            seen.add(key)
+            out.append(v)
+    return out
+
+
+def _torrent_key(t: dict) -> str:
+    """מפתח ייחודי לטורנט לצורך מיזוג בלי כפילויות."""
+    h = (t.get("hash") or t.get("info_hash") or "").lower()
+    if h:
+        return h
+    mag = t.get("magnet") or ""
+    mm = re.search(r"(?i)urn:btih:([a-z0-9]{32,40})", mag)
+    if mm:
+        return mm.group(1).lower()
+    return (t.get("raw_title") or t.get("title") or "").lower()
+
+
+async def _search_once(session, query: str, check_cache: bool) -> list:
+    """בקשת חיפוש בודדת ל-search-api. מחזיר רשימת torrents גולמית (או [])."""
+    from urllib.parse import quote
+    url = f"{SEARCH_BASE}/torrents/search/{quote(query)}"
+    params = {"metadata": "false"}
+    if check_cache:
+        params["check_cache"] = "true"
     try:
-        logger.debug(f"[JACKETT] GET params={params}")
-        async with session.get(url, params=full_params, timeout=aiohttp.ClientTimeout(total=25)) as resp:
-            logger.debug(f"[JACKETT] Response status={resp.status}")
-            if resp.status != 200:
-                body = await resp.text()
-                logger.error(f"[JACKETT] HTTP {resp.status}: {body[:300]}")
+        logger.debug(f"[TBSEARCH] GET {url} | params={params}")
+        async with session.get(url, params=params, headers=_headers(),
+                               timeout=_SEARCH_TIMEOUT) as resp:
+            body = await resp.json(content_type=None)
+            if resp.status != 200 or not body.get("success", False):
+                detail = body.get("error") or body.get("detail") or f"HTTP {resp.status}"
+                logger.warning(f"[TBSEARCH] query={query!r} failed: {detail}")
                 return []
-            data = await resp.json(content_type=None)
-            results = data.get("Results", [])
-            logger.info(f"[JACKETT] Got {len(results)} raw results for params={params}")
-            return results
+            torrents = (body.get("data") or {}).get("torrents", []) or []
+            logger.info(f"[TBSEARCH] query={query!r} → {len(torrents)} torrents")
+            return torrents
     except Exception as e:
-        logger.error(f"[JACKETT] Request failed: {type(e).__name__}: {e}")
+        logger.error(f"[TBSEARCH] query={query!r} error: {type(e).__name__}: {e}")
         return []
-
-
-def _parse_raw(raw_list: list) -> list:
-    """ממיר תוצאות גולמיות מJackett למבנה אחיד."""
-    results = []
-    for r in raw_list:
-        info_hash = r.get("InfoHash") or ""
-        magnet = r.get("MagnetUri") or ""
-        if not info_hash and "urn:btih:" in magnet:
-            m = re.search(r"urn:btih:([a-fA-F0-9]{40})", magnet)
-            info_hash = m.group(1) if m else ""
-        results.append({
-            "info_hash": info_hash.lower(),
-            "name": r.get("Title", "Unknown"),
-            "size": r.get("Size", 0),
-            "seeders": r.get("Seeders", 0),
-            "leechers": r.get("Peers", 0),
-            "magnet": magnet,
-        })
-    return results
 
 
 async def search(query: str, check_cache: bool = True):
     """
-    חיפוש דרך Jackett עם זיהוי חכם של סדרות/סרטים.
-
-    לסדרות (SxxExx): משתמש ב-t=tvsearch עם season/ep נפרדים —
-    זה האופן הנכון ב-Torznab שמניב הרבה יותר תוצאות.
-    לסרטים/חיפוש כללי: t=search רגיל.
+    חיפוש דרך מנוע החיפוש הרשמי של TorBox.
+    מנסה כמה ניסוחים (מהמדויק לרחב) וממזג — כדי שתמיד יחזרו תוצאות רלוונטיות.
+    מחזיר רשימת torrents גולמיים; services/parser.normalize ממיר למבנה האחיד.
     """
-    if not JACKETT_KEY:
-        logger.error("JACKETT_API_KEY not set in .env")
+    if not config.TORBOX_API_KEY:
+        logger.error("TORBOX_API_KEY not set in .env")
         return []
 
-    # זיהוי SxxExx (למשל S05E06 או s5e6)
-    tv_match = re.search(r'(?i)\bS(\d{1,2})[\s._-]?E(\d{1,2})\b', query)
+    variants = _query_variants(query)
+    merged: dict = {}
 
-    raw = []
     async with aiohttp.ClientSession() as session:
-        if tv_match:
-            season = int(tv_match.group(1))
-            episode = int(tv_match.group(2))
-            # שם הסדרה בלבד (בלי SxxExx)
-            show_name = re.sub(r'(?i)\bS\d{1,2}[\s._-]?E\d{1,2}\b', '', query).strip()
-            logger.info(f"[JACKETT] TV search | show={show_name!r} S{season:02d}E{episode:02d}")
+        for v in variants:
+            torrents = await _search_once(session, v, check_cache)
+            for t in torrents:
+                merged.setdefault(_torrent_key(t), t)
+            # מספיק תוצאות — אין צורך להרחיב עוד
+            if len(merged) >= config.SEARCH_ENOUGH:
+                break
 
-            # חיפוש tvsearch עם עונה+פרק — הדרך הנכונה
-            tv_raw = await _jackett_fetch(session, {
-                "t": "tvsearch",
-                "q": show_name,
-                "season": season,
-                "ep": episode,
-            })
-            raw.extend(tv_raw)
-
-            # fallback: חיפוש כללי עם השאילתה המלאה (SxxExx כמחרוזת)
-            if len(raw) < 5:
-                logger.info("[JACKETT] tvsearch gave few results, trying general search fallback")
-                gen_raw = await _jackett_fetch(session, {
-                    "t": "search",
-                    "Query": f"{show_name} S{season:02d}E{episode:02d}",
-                })
-                # מיזוג ללא כפילויות
-                existing_hashes = {r.get("InfoHash", "").lower() for r in raw}
-                for r in gen_raw:
-                    if r.get("InfoHash", "").lower() not in existing_hashes:
-                        raw.append(r)
-        else:
-            # חיפוש כללי (סרט / משחק / תוכנה / שם בלבד)
-            logger.info(f"[JACKETT] General search | query={query!r}")
-            raw = await _jackett_fetch(session, {
-                "t": "search",
-                "Query": query,
-            })
-
-    logger.info(f"[JACKETT] Total raw after all searches: {len(raw)}")
-    if not raw:
-        logger.warning(f"[JACKETT] No results at all for query={query!r}")
-        return []
-
-    results = _parse_raw(raw)
-
-    # מיון לפי seeders, הגבלה ל-60
-    results.sort(key=lambda x: x.get("seeders", 0), reverse=True)
-    results = results[:60]
-    logger.info(f"[JACKETT] After processing: {len(results)} results (top 60 by seeders)")
-
-    # בדיקת קאש ב-TorBox
-    if check_cache and results:
-        hashes = [r["info_hash"] for r in results if r.get("info_hash")]
-        if hashes:
-            try:
-                cached_data = await check_cached(hashes)
-                if isinstance(cached_data, dict):
-                    for r in results:
-                        if any(k.lower() == r["info_hash"] for k in cached_data.keys()):
-                            r["cached"] = True
-                elif isinstance(cached_data, list):
-                    cached_hashes = {item.get("hash", "").lower() for item in cached_data}
-                    for r in results:
-                        if r["info_hash"] in cached_hashes:
-                            r["cached"] = True
-            except Exception:
-                pass
-
+    results = list(merged.values())
+    # מיון לפי seeders והגבלה
+    results.sort(key=lambda t: t.get("last_known_seeders") or t.get("seeders") or 0, reverse=True)
+    results = results[:config.SEARCH_LIMIT]
+    cached_n = sum(1 for t in results if t.get("cached"))
+    logger.info(f"[TBSEARCH] query={query!r} | variants={len(variants)} | "
+                f"merged={len(results)} | cached={cached_n}")
     return results
-
-= {item.get("hash", "").lower() for item in cached_data}
-                    for r in results:
-                        if r["info_hash"] in cached_hashes:
-                            r["cached"] = True
-            except Exception:
-                pass
-
-    return results
-
-
-
 
 
 # ───────────────────────── הורדה ─────────────────────────
