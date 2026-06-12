@@ -36,40 +36,42 @@ async def _post(session, path, json_body=None, data_body=None):
         return data.get("data")
 
 
-# ───────────────────────── חיפוש (חלופה ציבורית - SolidTorrents) ─────────────────────────
+# ───────────────────────── חיפוש (חלופה ציבורית - TorrentsCSV) ─────────────────────────
 import logging
 logger = logging.getLogger(__name__)
 
 async def search(query: str, check_cache: bool = True):
     """
-    חיפוש טורנטים דרך SolidTorrents כתחליף למנוע החיפוש החסום של TorBox.
-    עדיין מבצע בדיקת קאש מול שרתי TorBox לזיהוי הורדה מיידית.
+    חיפוש טורנטים דרך Torrents-CSV כתחליף למנוע החיפוש החסום של TorBox.
+    מנוע זה אינו חוסם שרתי VPS עם Cloudflare.
     """
-    url = "https://solidtorrents.to/api/v1/search"
-    params = {"q": query}
+    url = "https://torrents-csv.com/service/search"
+    params = {"q": query, "size": 50}
     
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(url, params=params) as resp:
                 if resp.status != 200:
                     text = await resp.text()
-                    logger.error(f"SolidTorrents returned {resp.status}: {text}")
-                    raise Exception(f"HTTP {resp.status} - {text[:100]}")
+                    logger.error(f"TorrentsCSV returned {resp.status}: {text[:200]}")
+                    raise Exception(f"HTTP {resp.status}")
                 data = await resp.json(content_type=None)
-                results = data.get("results", [])
+                results = data.get("torrents", [])
         except Exception as e:
-            logger.exception(f"Error connecting to SolidTorrents: {e}")
-            raise TorBoxError(f"שגיאת תקשורת מול מנוע החיפוש: {e}")
+            logger.exception(f"Error connecting to TorrentsCSV: {e}")
+            raise TorBoxError("מנוע החיפוש אינו זמין כרגע. אנא נסה שוב מאוחר יותר.")
             
         if not isinstance(results, list):
             return []
             
-        # מתאים את שם השדה hash כדי ש-parser.py יזהה אותו
+        # התאמת שדות למבנה ש-parser.py מצפה לו
         for r in results:
             if "infohash" in r and "info_hash" not in r:
                 r["info_hash"] = r["infohash"]
+            if "size_bytes" in r and "size" not in r:
+                r["size"] = r["size_bytes"]
             
-        # הגבלת כמות תוצאות למניעת עומס
+        # הגבלת כמות תוצאות
         results = results[:60]
         
         # בדיקת קאש ב-TorBox
@@ -78,7 +80,6 @@ async def search(query: str, check_cache: bool = True):
             if hashes:
                 try:
                     cached_data = await check_cached(hashes)
-                    # format=object returns a list or dict depending on TorBox API version
                     if isinstance(cached_data, dict):
                         for r in results:
                             thash = r.get("info_hash", "").lower()
