@@ -4,11 +4,14 @@ handlers/search.py — חיפוש, תצוגת תוצאות, ניווט, פרטי
 """
 from telegram import Update
 from telegram.ext import ContextTypes
+import logging
 
 import config
 import database as db
 from handlers.auth import require_role
 from services import torbox_api, parser, keyboards as kb, formatter as fmt
+
+logger = logging.getLogger(__name__)
 
 
 # ───────────────────────── בקשת חיפוש ─────────────────────────
@@ -29,24 +32,31 @@ async def prompt_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def do_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """מקבל טקסט חופשי ומבצע חיפוש ב-TorBox."""
     query = update.message.text.strip()
+    user = update.effective_user
     context.user_data["awaiting_search"] = False
+    logger.info(f"[SEARCH] START | user={user.id} | query={query!r}")
 
     status_msg = await update.message.reply_text("🔍 מחפש בכל המקורות...")
 
     try:
         raw_results = await torbox_api.search(query)
     except torbox_api.TorBoxError as e:
+        logger.error(f"[SEARCH] TorBoxError | user={user.id} | query={query!r} | error={e}")
         await status_msg.edit_text(f"⚠️ שגיאה בחיפוש:\n{e}")
         return
     except Exception as e:
+        logger.exception(f"[SEARCH] Unexpected error | user={user.id} | query={query!r}")
         await status_msg.edit_text(f"⚠️ שגיאה לא צפויה: {e}")
         return
 
     # נרמול
     results = [parser.normalize(r) for r in raw_results]
+    cached_count = sum(1 for r in results if r.get("cached"))
+    logger.info(f"[SEARCH] DONE | user={user.id} | query={query!r} | total={len(results)} | cached={cached_count}")
     await db.log_search(update.effective_user.id, query, len(results))
 
     if not results:
+        logger.info(f"[SEARCH] NO RESULTS | user={user.id} | query={query!r}")
         await status_msg.edit_text(
             f"😕 לא נמצאו תוצאות עבור <b>{fmt.escape(query)}</b>.\n"
             "נסה ניסוח אחר.",
@@ -57,8 +67,8 @@ async def do_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["query"] = query
     context.user_data["all_results"] = results
     context.user_data["temp_filter"] = {}
-    user = await db.get_user(update.effective_user.id)
-    context.user_data["settings"] = user["settings"]
+    user_db = await db.get_user(update.effective_user.id)
+    context.user_data["settings"] = user_db["settings"]
 
     await _render_results(status_msg, context, page=0)
 
@@ -77,6 +87,7 @@ async def _render_results(message, context, page=0):
         desc=bool(temp.get("sort_desc", settings.get("sort_desc", 1))),
     )
     context.user_data["filtered"] = filtered
+    logger.debug(f"[RENDER] query={context.user_data.get('query')!r} | all={len(all_results)} | filtered={len(filtered)} | page={page}")
 
     if not filtered:
         await message.edit_text(

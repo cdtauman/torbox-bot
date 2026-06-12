@@ -62,17 +62,22 @@ async def search(query: str, check_cache: bool = True):
 
     async with aiohttp.ClientSession() as session:
         try:
+            logger.debug(f"[JACKETT] GET {url} | query={query!r}")
             async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                logger.debug(f"[JACKETT] Response status={resp.status}")
                 if resp.status != 200:
-                    logger.error(f"Jackett returned {resp.status}: {await resp.text()}")
+                    body = await resp.text()
+                    logger.error(f"[JACKETT] HTTP {resp.status}: {body[:300]}")
                     return []
                 data = await resp.json(content_type=None)
         except Exception as e:
-            logger.error(f"Jackett search failed: {e}")
+            logger.error(f"[JACKETT] Request failed: {type(e).__name__}: {e}")
             return []
 
     raw = data.get("Results", [])
+    logger.info(f"[JACKETT] Raw results: {len(raw)} items")
     if not raw:
+        logger.warning(f"[JACKETT] No results from Jackett for query={query!r}")
         return []
 
     results = []
@@ -96,6 +101,7 @@ async def search(query: str, check_cache: bool = True):
     # מיון לפי seeders
     results.sort(key=lambda x: x.get("seeders", 0), reverse=True)
     results = results[:60]
+    logger.info(f"[JACKETT] After processing: {len(results)} results (top 60 by seeders)")
 
     # בדיקת קאש ב-TorBox
     if check_cache and results:

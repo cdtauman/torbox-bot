@@ -19,8 +19,47 @@ from handlers.auth import require_role
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO)
+# לוגים מפורטים על מודולי הבוט שלנו
+logging.getLogger("__main__").setLevel(logging.DEBUG)
+logging.getLogger("handlers").setLevel(logging.DEBUG)
+logging.getLogger("services").setLevel(logging.DEBUG)
+# שתוק את הספריות הפנימיות
 logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("telegram").setLevel(logging.WARNING)
+logging.getLogger("aiohttp").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
+
+
+# ───────────────────────── Middleware — לוג כל update ─────────────────────────
+async def log_all_updates(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """מתועד כל update שמגיע מטלגרם — הודעות, כפתורים, כל דבר."""
+    user = update.effective_user
+    uid = user.id if user else "?"
+    uname = f"@{user.username}" if (user and user.username) else (user.first_name if user else "unknown")
+
+    if update.message:
+        msg = update.message
+        if msg.text:
+            logger.info(f"[MSG] user={uid} ({uname}) | text={msg.text!r}")
+        elif msg.document:
+            logger.info(f"[DOC] user={uid} ({uname}) | file={msg.document.file_name!r} size={msg.document.file_size}")
+        elif msg.photo:
+            logger.info(f"[PHOTO] user={uid} ({uname}) | photo received")
+        elif msg.sticker:
+            logger.info(f"[STICKER] user={uid} ({uname})")
+        else:
+            logger.info(f"[MSG-OTHER] user={uid} ({uname}) | update_id={update.update_id}")
+
+    elif update.callback_query:
+        cq = update.callback_query
+        logger.info(f"[BTN] user={uid} ({uname}) | callback_data={cq.data!r}")
+
+    elif update.inline_query:
+        logger.info(f"[INLINE] user={uid} ({uname}) | query={update.inline_query.query!r}")
+
+    else:
+        logger.info(f"[UPDATE] user={uid} ({uname}) | type={list(update.parse_mode_entities() if hasattr(update,'parse_mode_entities') else [])} update_id={update.update_id}")
 
 
 # ───────────────────────── ראוטר טקסט חופשי ─────────────────────────
@@ -32,18 +71,23 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     - אחרת         → חיפוש
     """
     text = (update.message.text or "").strip()
+    user = update.effective_user
+    logger.debug(f"[ROUTER] text_router: user={user.id} text={text[:80]!r}")
 
     # שידור ממתין?
     if context.user_data.get("awaiting_broadcast"):
+        logger.debug(f"[ROUTER] → do_broadcast (user={user.id})")
         await admin.do_broadcast(update, context)
         return
 
     # magnet?
     if text.lower().startswith("magnet:?"):
+        logger.debug(f"[ROUTER] → handle_magnet (user={user.id})")
         await download.handle_magnet(update, context)
         return
 
     # אחרת — חיפוש
+    logger.debug(f"[ROUTER] → do_search (user={user.id}) query={text[:80]!r}")
     await search.do_search(update, context)
 
 
@@ -58,6 +102,8 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """מנתב את כל לחיצות הכפתורים לפי תחילית ה-callback_data."""
     q = update.callback_query
     data = q.data or ""
+    user = q.from_user
+    logger.debug(f"[CALLBACK] user={user.id} (@{user.username}) | data={data!r}")
 
     # noop — כפתורי כותרת
     if data == "noop":
@@ -138,9 +184,10 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return await admin.user_action(update, context)
 
         # לא מזוהה
+        logger.warning(f"[CALLBACK] unrecognized callback_data={data!r} from user={q.from_user.id}")
         await q.answer("פעולה לא מזוהה")
     except Exception as e:
-        logger.exception("Error in callback router")
+        logger.exception(f"[CALLBACK] Exception handling data={data!r} from user={q.from_user.id}")
         try:
             await q.answer(f"שגיאה: {e}", show_alert=True)
         except Exception:
@@ -160,6 +207,10 @@ def main():
         raise SystemExit("❌ חסר TORBOX_API_KEY בקובץ .env")
 
     app = Application.builder().token(config.BOT_TOKEN).post_init(post_init).build()
+
+    # Middleware — לוג כל update לפני כל handler
+    app.add_handler(MessageHandler(filters.ALL, log_all_updates), group=-1)
+    app.add_handler(CallbackQueryHandler(log_all_updates), group=-1)
 
     # פקודות
     app.add_handler(CommandHandler("start", menu.cmd_start))
