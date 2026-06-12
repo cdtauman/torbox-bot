@@ -42,20 +42,21 @@ async def search(query: str, check_cache: bool = True):
     חיפוש טורנטים לפי שאילתה חופשית.
     מחזיר רשימת תוצאות גולמית מ-TorBox.
     """
+    url = "https://search-api.torbox.app/torrents/search"
     params = {"query": query}
     if check_cache:
         params["check_cache"] = "true"
         params["check_owned"] = "true"
     async with aiohttp.ClientSession() as session:
-        try:
-            data = await _get(session, f"/torrents/search/{query}", params={"metadata": "false"})
-        except TorBoxError:
-            # מבנה חלופי לפי גרסת ה-API
-            data = await _get(session, "/torrents/search", params=params)
-    # ה-API עשוי להחזיר {"torrents": [...]} או רשימה ישירה
-    if isinstance(data, dict):
-        return data.get("torrents") or data.get("results") or []
-    return data or []
+        async with session.get(url, headers=_headers(), params=params) as resp:
+            data = await resp.json(content_type=None)
+            if not data.get("success", False):
+                raise TorBoxError(data.get("detail") or data.get("error") or "שגיאה לא ידועה מ-TorBox")
+            res_data = data.get("data")
+            
+    if isinstance(res_data, dict):
+        return res_data.get("torrents") or res_data.get("results") or []
+    return res_data or []
 
 
 # ───────────────────────── הורדה ─────────────────────────
