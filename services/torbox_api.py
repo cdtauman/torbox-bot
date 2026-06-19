@@ -30,7 +30,11 @@ class TorBoxError(Exception):
 
 
 def _headers():
-    return {"Authorization": f"Bearer {config.TORBOX_API_KEY}"}
+    return {
+        "Authorization": f"Bearer {config.TORBOX_API_KEY}",
+        "Accept": "application/json",
+        "User-Agent": "torbox-bot/1.0",
+    }
 
 
 async def _get(session, path, params=None):
@@ -51,9 +55,36 @@ async def _post(session, path, json_body=None, data_body=None):
         return data.get("data")
 
 
+async def _configured_search_engines(session) -> list:
+    engines = await _get(session, "/user/settings/searchengines")
+    return engines if isinstance(engines, list) else []
+
+
 # ───────────────────────── חיפוש (TorBox Search API) ─────────────────────────
 _SXXEXX = re.compile(r'(?i)\bS(\d{1,2})[\s._-]?E(\d{1,3})\b')
 _SXX = re.compile(r'(?i)\bS(\d{1,2})\b')
+_SEPARATORS = re.compile(r"[\s._-]+")
+_TRAILING_YEAR = re.compile(r"(?i)[\s._-]+(?:19|20)\d{2}$")
+
+
+def _append_query_variant(variants: list, value: str):
+    value = (value or "").strip(" .-_")
+    if not value:
+        return
+
+    variants.append(value)
+    spaced = _SEPARATORS.sub(" ", value).strip()
+    if spaced != value:
+        variants.append(spaced)
+
+
+def _title_variants(title: str) -> list:
+    title = (title or "").strip(" .-_")
+    variants = [title]
+    without_year = _TRAILING_YEAR.sub("", title).strip(" .-_")
+    if without_year and without_year != title:
+        variants.append(without_year)
+    return variants
 
 
 def _query_variants(query: str) -> list:
@@ -64,21 +95,27 @@ def _query_variants(query: str) -> list:
     התוצאות ממוזגות, כך שגם פרק בודד וגם חבילת-עונה יופיעו.
     """
     q = query.strip()
-    variants = [q]
+    variants = []
+    _append_query_variant(variants, q)
 
     m = _SXXEXX.search(q)
     if m:
         season = int(m.group(1))
+        episode = int(m.group(2))
         title = _SXXEXX.sub("", q).strip(" .-_")
-        # חבילת עונה (S05) ושם נקי — מה שמצאת שמחזיר תוצאות גם כשהפרק לא
-        variants.append(f"{title} S{season:02d}")
-        variants.append(title)
+        # חבילת עונה (S05), שם נקי, וגם וריאציות בלי נקודות/שנת יציאה.
+        for base_title in _title_variants(title):
+            _append_query_variant(variants, f"{base_title} S{season:02d}E{episode:02d}")
+            _append_query_variant(variants, f"{base_title} S{season:02d}")
+            _append_query_variant(variants, base_title)
     else:
         m2 = _SXX.search(q)
         if m2:
+            season = int(m2.group(1))
             title = _SXX.sub("", q).strip(" .-_")
-            if title:
-                variants.append(title)
+            for base_title in _title_variants(title):
+                _append_query_variant(variants, f"{base_title} S{season:02d}")
+                _append_query_variant(variants, base_title)
 
     # הסרת כפילויות תוך שמירת סדר
     seen, out = set(), []
@@ -106,24 +143,64 @@ async def _search_once(session, query: str, check_cache: bool) -> list:
     """בקשת חיפוש בודדת ל-search-api. מחזיר רשימת torrents גולמית (או [])."""
     from urllib.parse import quote
     url = f"{SEARCH_BASE}/torrents/search/{quote(query)}"
-    params = {"metadata": "false"}
+    params = {"metadata": "false", "search_user_engines": "true"}
     if check_cache:
         params["check_cache"] = "true"
     try:
         logger.debug(f"[TBSEARCH] GET {url} | params={params}")
         async with session.get(url, params=params, headers=_headers(),
                                timeout=_SEARCH_TIMEOUT) as resp:
-            body = await resp.json(content_type=None)
+            try:
+                body = await resp.json(content_type=None)
+            except Exception:
+                detail = (await resp.text())[:300] or f"HTTP {resp.status}"
+                if resp.status in (401, 403, 429):
+                    raise TorBoxError(_search_error_message(resp.status, detail))
+                logger.warning(f"[TBSEARCH] query={query!r} failed: {detail}")
+                return []
             if resp.status != 200 or not body.get("success", False):
                 detail = body.get("error") or body.get("detail") or f"HTTP {resp.status}"
                 logger.warning(f"[TBSEARCH] query={query!r} failed: {detail}")
+                if resp.status in (401, 403, 429):
+                    raise TorBoxError(_search_error_message(resp.status, detail))
                 return []
             torrents = (body.get("data") or {}).get("torrents", []) or []
             logger.info(f"[TBSEARCH] query={query!r} → {len(torrents)} torrents")
             return torrents
+    except TorBoxError:
+        raise
     except Exception as e:
         logger.error(f"[TBSEARCH] query={query!r} error: {type(e).__name__}: {e}")
         return []
+
+
+def _search_error_message(status: int, detail: str) -> str:
+    detail = detail or f"HTTP {status}"
+    if status == 429:
+        if "0 per" in detail.lower():
+            return (
+                "TorBox Search API מחזיר מגבלת שימוש של 0 בקשות לדקה לחשבון הזה. "
+                "הטוקן תקין ל-API הראשי, אבל החיפוש דורש מכסת Search API זמינה. "
+                "אם יש לך מנוי פעיל, בדוק שב-TorBox מוגדר לפחות Search Engine פעיל "
+                "(Prowlarr/Jackett/NZBHydra) תחת Settings > Search. "
+                f"פירוט TorBox: {detail}"
+            )
+        return f"TorBox Search API חסם זמנית בגלל rate limit. פירוט TorBox: {detail}"
+    if status in (401, 403):
+        return (
+            "TorBox Search API דחה את בקשת החיפוש. בדוק שה-TORBOX_API_KEY תקין "
+            f"ושהחשבון מורשה לחיפוש. פירוט TorBox: {detail}"
+        )
+    return f"שגיאה בחיפוש מול TorBox Search API: {detail}"
+
+
+def _missing_search_engines_message() -> str:
+    return (
+        "לא מוגדרים Search Engines בחשבון TorBox שלך. "
+        "TorBox Search API לא מחפש לבד באינטרנט; הוא מחפש דרך מנועי BYOI שאתה מוסיף לחשבון "
+        "כמו Prowlarr או Jackett. הוסף Search Engine ב-TorBox תחת Settings > Search, "
+        "ואז נסה שוב."
+    )
 
 
 async def search(query: str, check_cache: bool = True):
@@ -140,6 +217,10 @@ async def search(query: str, check_cache: bool = True):
     merged: dict = {}
 
     async with aiohttp.ClientSession() as session:
+        engines = await _configured_search_engines(session)
+        if not engines:
+            raise TorBoxError(_missing_search_engines_message())
+
         for v in variants:
             torrents = await _search_once(session, v, check_cache)
             for t in torrents:
@@ -164,6 +245,19 @@ async def add_magnet(magnet: str):
     async with aiohttp.ClientSession() as session:
         form = aiohttp.FormData()
         form.add_field("magnet", magnet)
+        return await _post(session, "/torrents/createtorrent", data_body=form)
+
+
+async def add_torrent_file(filename: str, content: bytes):
+    """מעלה קובץ .torrent ל-TorBox."""
+    async with aiohttp.ClientSession() as session:
+        form = aiohttp.FormData()
+        form.add_field(
+            "file",
+            content,
+            filename=filename or "upload.torrent",
+            content_type="application/x-bittorrent",
+        )
         return await _post(session, "/torrents/createtorrent", data_body=form)
 
 
