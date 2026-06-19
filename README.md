@@ -7,7 +7,7 @@
 ## ✨ יכולות
 
 **חיפוש חכם**
-- חיפוש טקסט חופשי בכל המקורות של TorBox
+- חיפוש טקסט חופשי דרך Prowlarr או TorBox Search API
 - זיהוי אוטומטי של איכות (480p/720p/1080p/4K), קטגוריה ושפה
 - תמיכה ב-magnet ובקבצי `.torrent` ישירות
 
@@ -54,11 +54,53 @@ nano .env
 - `BOT_TOKEN` — מ-@BotFather
 - `TORBOX_API_KEY` — מ-https://torbox.app/settings (לשונית API)
 - `OWNER_ID` — ה-ID שלך מ-[@userinfobot](https://t.me/userinfobot)
+- `SEARCH_PROVIDER=prowlarr` — מומלץ להרצה על Hetzner
+- `PROWLARR_API_KEY` — מתוך Prowlarr: `Settings > General`
 
 ### 4. הרצה
 ```bash
 python bot.py
 ```
+
+---
+
+## 🐳 הרצה בטוחה על Hetzner עם Prowlarr
+
+השרת משמש לחיפוש בלבד. אין להריץ עליו qBittorrent/Transmission ואין לבצע הורדות P2P ממנו.
+ההורדות בפועל נשלחות ל-TorBox.
+
+```bash
+cp .env.example .env
+nano .env
+docker compose up -d --build
+```
+
+Prowlarr לא פתוח לאינטרנט. כדי להגדיר אותו פתח SSH tunnel מהמחשב שלך:
+
+```bash
+ssh -L 9696:127.0.0.1:9696 root@YOUR_SERVER_IP
+```
+
+ואז בדפדפן:
+
+```text
+http://127.0.0.1:9696
+```
+
+בתוך Prowlarr:
+- הוסף indexers שאתה מורשה להשתמש בהם.
+- בדוק חיפוש ידני ל-`Oasis.2026.S01E01`.
+- העתק API Key מ-`Settings > General` אל `PROWLARR_API_KEY` בקובץ `.env`.
+- הרץ מחדש:
+
+```bash
+docker compose up -d --build
+```
+
+בדיקת בטיחות:
+- פורט `9696` קשור רק ל-`127.0.0.1`.
+- הבוט מדבר עם Prowlarr דרך Docker network פנימי: `http://prowlarr:9696`.
+- אין download client על השרת, ולכן אין תעבורת P2P מהשרת.
 
 ---
 
@@ -97,6 +139,8 @@ torbox-bot/
 ├── bot.py                  # נקודת כניסה + ראוטר כפתורים
 ├── config.py               # הגדרות גלובליות וקבועים
 ├── database.py             # SQLite — משתמשים, היסטוריה, הגדרות
+├── docker-compose.yml      # פריסה בטוחה עם Prowlarr פנימי
+├── Dockerfile              # קונטיינר לבוט
 │
 ├── handlers/
 │   ├── auth.py             # בדיקות הרשאה
@@ -110,6 +154,7 @@ torbox-bot/
 │
 ├── services/
 │   ├── torbox_api.py       # עטיפת TorBox API
+│   ├── prowlarr_api.py     # חיפוש דרך Prowlarr
 │   ├── parser.py           # נרמול, סינון, מיון, זיהוי איכות
 │   ├── keyboards.py        # כל הכפתורים
 │   └── formatter.py        # עיצוב הודעות בעברית
@@ -125,14 +170,14 @@ torbox-bot/
 
 **הוספת זיהוי קטגוריות / איכויות** — ערוך את `CATEGORY_KEYWORDS` ו-`QUALITY_PATTERNS` ב-`config.py`.
 
-**אינדקסרים פרטיים (Prowlarr/Jackett)** — TorBox תומך בהוספת מנועי חיפוש משלך (BYOI) דרך ההגדרות באתר. הבוט ישתמש בהם אוטומטית דרך אותו Search API.
+**אינדקסרים פרטיים (Prowlarr/Jackett)** — ההמלצה היא לחפש ישירות ב-Prowlarr מתוך הבוט (`SEARCH_PROVIDER=prowlarr`) ולשלוח את ההורדה ל-TorBox. TorBox Search API נשאר fallback בלבד.
 
 ---
 
 ## ⚠️ הערות
 
-- החיפוש ב-TorBox דורש **מנוי בתשלום**. במנוי חינמי החיפוש לא יחזיר תוצאות.
-- מבנה תגובת ה-Search API עשוי להשתנות בין גרסאות. אם החיפוש לא מחזיר תוצאות, בדוק את התיעוד העדכני ב-https://api-docs.torbox.app והתאם את `services/torbox_api.py`.
+- החיפוש דרך Prowlarr דורש לפחות indexer פעיל אחד ב-Prowlarr.
+- TorBox Search API דורש Search Engines מוגדרים בחשבון TorBox, ולכן אינו פתרון ראשי בבוט הזה.
 - הבוט מיועד לשימוש אישי/קבוצתי סגור. אתה אחראי לתוכן שאתה מוריד ולחוקי זכויות היוצרים במדינתך.
 
 ---

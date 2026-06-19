@@ -1,0 +1,12 @@
+.env
+.git
+.agents
+.codex
+.runenv
+.venv
+venv
+__pycache__
+*.pyc
+*.db
+*.torrent
+scripts/__pycache__

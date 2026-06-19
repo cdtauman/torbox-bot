@@ -25,13 +25,15 @@ def normalize(raw: dict) -> dict:
     leechers = _to_int(raw.get("peers") or raw.get("leechers") or raw.get("last_known_peers") or 0)
 
     thash = (raw.get("hash") or raw.get("info_hash") or "").lower()
-    magnet = raw.get("magnet") or raw.get("magnet_link") or ""
+    magnet = raw.get("magnet") or raw.get("magnet_link") or raw.get("magnetUrl") or ""
+    generated_magnet = False
     if not thash and magnet:
         m = re.search(r"(?i)urn:btih:([a-z0-9]{32,40})", magnet)
         if m:
             thash = m.group(1).lower()
     if not magnet and thash:
         magnet = f"magnet:?xt=urn:btih:{thash}"
+        generated_magnet = True
 
     cached = bool(raw.get("cached") or raw.get("is_cached") or raw.get("nzb"))
     owned = bool(raw.get("owned") or raw.get("is_owned"))
@@ -41,11 +43,14 @@ def normalize(raw: dict) -> dict:
 
     return {
         "name": name,
+        "source": raw.get("source") or "",
         "size": size,
         "seeders": seeders,
         "leechers": leechers,
         "hash": thash,
         "magnet": magnet,
+        "generated_magnet": generated_magnet,
+        "torrent_url": raw.get("torrent_url") or raw.get("download_url") or raw.get("downloadUrl") or "",
         "cached": cached,
         "owned": owned,
         "age": str(age),

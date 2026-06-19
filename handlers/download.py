@@ -11,7 +11,7 @@ from telegram.ext import ContextTypes
 import config
 import database as db
 from handlers.auth import require_role
-from services import torbox_api, keyboards as kb, formatter as fmt, parser
+from services import torbox_api, prowlarr_api, keyboards as kb, formatter as fmt, parser
 
 
 # ───────────────────────── הורדה מתוצאה ─────────────────────────
@@ -30,10 +30,21 @@ async def download_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(msg)
 
     try:
-        if r["magnet"]:
+        if r.get("magnet") and not r.get("generated_magnet"):
             data = await torbox_api.add_magnet(r["magnet"])
-        else:
+        elif r.get("source") == "prowlarr" and r.get("torrent_url"):
+            filename, content = await prowlarr_api.fetch_torrent(r["torrent_url"])
+            data = await torbox_api.add_torrent_file(filename, content)
+        elif r.get("magnet"):
+            data = await torbox_api.add_magnet(r["magnet"])
+        elif r.get("hash"):
             data = await torbox_api.add_hash(r["hash"])
+        else:
+            await q.edit_message_text("⚠️ לתוצאה הזו אין magnet, hash או קובץ torrent.", reply_markup=kb.back_home())
+            return
+    except prowlarr_api.ProwlarrError as e:
+        await q.edit_message_text(f"⚠️ {e}", reply_markup=kb.back_home())
+        return
     except torbox_api.TorBoxError as e:
         await q.edit_message_text(f"⚠️ {e}", reply_markup=kb.back_home())
         return
@@ -81,33 +92,28 @@ async def handle_torrent_file(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not doc.file_name.lower().endswith(".torrent"):
         return
     status = await update.message.reply_text("📥 מעבד את קובץ ה-torrent...")
+    path = ""
     try:
         tg_file = await doc.get_file()
         tmp_dir = tempfile.gettempdir()
         path = os.path.join(tmp_dir, doc.file_name)
         await tg_file.download_to_drive(path)
 
-        import aiohttp
         with open(path, "rb") as f:
-            form = aiohttp.FormData()
-            form.add_field("file", f.read(), filename=doc.file_name,
-                           content_type="application/x-bittorrent")
-            async with aiohttp.ClientSession() as session:
-                url = f"{torbox_api.BASE}/torrents/createtorrent"
-                async with session.post(url, headers={"Authorization": f"Bearer {config.TORBOX_API_KEY}"},
-                                        data=form) as resp:
-                    res = await resp.json(content_type=None)
-        os.remove(path)
-        if not res.get("success"):
-            await status.edit_text(f"⚠️ {res.get('detail', 'שגיאה')}")
-            return
-        data = res.get("data", {})
+            data = await torbox_api.add_torrent_file(doc.file_name, f.read())
         torbox_id = data.get("torrent_id") or data.get("id")
         name = data.get("name", doc.file_name)
         await db.log_download(update.effective_user.id, name, 0, torbox_id, "")
         await status.edit_text(f"✅ נוסף בהצלחה!\n📋 {fmt.escape(name[:60])}", parse_mode="HTML")
+    except torbox_api.TorBoxError as e:
+        await status.edit_text(f"⚠️ {e}")
     except Exception as e:
         await status.edit_text(f"⚠️ שגיאה בעיבוד הקובץ: {e}")
+    finally:
+        try:
+            os.remove(path)
+        except Exception:
+            pass
 
 
 async def _is_admin(user_id):

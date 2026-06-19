@@ -26,6 +26,15 @@ TORBOX_SEARCH_URL = "https://search-api.torbox.app"
 # כמה תוצאות "מספיק" כדי להפסיק להרחיב את השאילתה, וכמה לשמור בסוף.
 SEARCH_ENOUGH = 15
 SEARCH_LIMIT = 60
+SEARCH_PROVIDER = os.getenv("SEARCH_PROVIDER", "torbox").strip().lower()
+SEARCH_CONCURRENCY = int(os.getenv("SEARCH_CONCURRENCY", "2"))
+
+# Prowlarr — מומלץ להריץ באותו Docker network כמו הבוט:
+# PROWLARR_URL=http://prowlarr:9696
+PROWLARR_URL = os.getenv("PROWLARR_URL", "").rstrip("/")
+PROWLARR_API_KEY = os.getenv("PROWLARR_API_KEY", "")
+PROWLARR_TIMEOUT = int(os.getenv("PROWLARR_TIMEOUT", "25"))
+PROWLARR_LIMIT = int(os.getenv("PROWLARR_LIMIT", str(SEARCH_LIMIT)))
 
 # ───────────────────────── בסיס נתונים ─────────────────────────
 DB_PATH = os.getenv("DB_PATH", "torbox_bot.db")

@@ -4,14 +4,16 @@ handlers/search.py — חיפוש, תצוגת תוצאות, ניווט, פרטי
 """
 from telegram import Update
 from telegram.ext import ContextTypes
+import asyncio
 import logging
 
 import config
 import database as db
 from handlers.auth import require_role
-from services import torbox_api, parser, keyboards as kb, formatter as fmt
+from services import torbox_api, prowlarr_api, parser, keyboards as kb, formatter as fmt
 
 logger = logging.getLogger(__name__)
+_SEARCH_SEMAPHORE = asyncio.Semaphore(max(1, config.SEARCH_CONCURRENCY))
 
 
 # ───────────────────────── בקשת חיפוש ─────────────────────────
@@ -39,7 +41,12 @@ async def do_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_msg = await update.message.reply_text("🔍 מחפש בכל המקורות...")
 
     try:
-        raw_results = await torbox_api.search(query)
+        async with _SEARCH_SEMAPHORE:
+            raw_results = await _search_provider(query)
+    except prowlarr_api.ProwlarrError as e:
+        logger.error(f"[SEARCH] ProwlarrError | user={user.id} | query={query!r} | error={e}")
+        await status_msg.edit_text(f"⚠️ שגיאה בחיפוש:\n{e}")
+        return
     except torbox_api.TorBoxError as e:
         logger.error(f"[SEARCH] TorBoxError | user={user.id} | query={query!r} | error={e}")
         await status_msg.edit_text(f"⚠️ שגיאה בחיפוש:\n{e}")
@@ -71,6 +78,19 @@ async def do_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["settings"] = user_db["settings"]
 
     await _render_results(status_msg, context, page=0)
+
+
+async def _search_provider(query: str):
+    provider = config.SEARCH_PROVIDER
+    if provider == "prowlarr":
+        return await prowlarr_api.search(query)
+    if provider == "auto":
+        try:
+            return await prowlarr_api.search(query)
+        except prowlarr_api.ProwlarrError as exc:
+            logger.warning("[SEARCH] Prowlarr failed in auto mode, falling back to TorBox: %s", exc)
+            return await torbox_api.search(query)
+    return await torbox_api.search(query)
 
 
 # ───────────────────────── רינדור תוצאות ─────────────────────────
