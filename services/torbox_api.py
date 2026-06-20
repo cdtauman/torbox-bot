@@ -313,3 +313,41 @@ async def control(torrent_id, operation: str):
 
 async def delete_torrent(torrent_id):
     return await control(torrent_id, "delete")
+
+
+# ───────────────────────── הורדות ישירות (WebDL/Debrid) ─────────────────────────
+async def create_webdl(link: str):
+    """מוסיף קישור Debrid (למשל Rapidgator) להורדה ב-TorBox."""
+    async with aiohttp.ClientSession() as session:
+        form = aiohttp.FormData()
+        form.add_field("link", link)
+        return await _post(session, "/webdl/createwebdl", data_body=form)
+
+
+async def webdl_list(webdl_id=None):
+    """רשימת ההורדות הישירות של המשתמש. אם נתון id — מחזיר אחד בלבד."""
+    params = {"bypass_cache": "true"}
+    if webdl_id is not None:
+        params["id"] = str(webdl_id)
+    async with aiohttp.ClientSession() as session:
+        return await _get(session, "/webdl/mylist", params=params)
+
+
+async def request_webdl_link(webdl_id, file_id=None):
+    """מבקש קישור הורדה ישיר (זמני) ל-WebDL שהושלם."""
+    params = {"token": config.TORBOX_API_KEY, "webdl_id": str(webdl_id)}
+    if file_id is not None:
+        params["file_id"] = str(file_id)
+    async with aiohttp.ClientSession() as session:
+        return await _get(session, "/webdl/requestdl", params=params)
+
+
+async def control_webdl(webdl_id, operation: str):
+    """פעולות שליטה ב-WebDL: 'delete', 'pause', 'resume'."""
+    async with aiohttp.ClientSession() as session:
+        return await _post(session, "/webdl/controlwebdl",
+                           json_body={"webdl_id": webdl_id, "operation": operation})
+
+
+async def delete_webdl(webdl_id):
+    return await control_webdl(webdl_id, "delete")
