@@ -32,7 +32,8 @@ async def init_db():
                 size        INTEGER,
                 torbox_id   INTEGER,
                 hash        TEXT,
-                created_at  INTEGER
+                created_at  INTEGER,
+                notified    INTEGER DEFAULT 0
             )
         """)
         await db.execute("""
@@ -45,6 +46,13 @@ async def init_db():
             )
         """)
         await db.commit()
+
+        # Migrations
+        try:
+            await db.execute("ALTER TABLE downloads ADD COLUMN notified INTEGER DEFAULT 0")
+            await db.commit()
+        except Exception:
+            pass
 
         # הגדרת הבעלים אוטומטית
         if config.OWNER_ID:
@@ -156,6 +164,25 @@ async def log_download(user_id: int, name: str, size: int, torbox_id, thash: str
             INSERT INTO downloads (user_id, name, size, torbox_id, hash, created_at)
             VALUES (?, ?, ?, ?, ?, ?)
         """, (user_id, name, size, torbox_id, thash, int(time.time())))
+        await db.commit()
+
+
+async def get_unnotified_downloads():
+    """מחזיר את כל ההורדות שעדיין לא קיבלו התראה ב-7 הימים האחרונים."""
+    seven_days_ago = int(time.time()) - (7 * 86400)
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM downloads WHERE notified=0 AND torbox_id IS NOT NULL AND created_at > ?",
+            (seven_days_ago,)
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def mark_download_as_notified(download_id: int):
+    """מסמן הורדה ככזו שנשלחה עבורה התראה."""
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        await db.execute("UPDATE downloads SET notified=1 WHERE id=?", (download_id,))
         await db.commit()
 
 

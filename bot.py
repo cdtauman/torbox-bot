@@ -255,6 +255,11 @@ async def post_init(application: Application):
     await application.bot.set_my_commands(commands)
     logger.info("Bot commands registered.")
 
+    # הפעלת משימת הניטור ברקע
+    import asyncio
+    from services.monitor import start_monitoring
+    asyncio.create_task(start_monitoring(application))
+
 
 def main():
     if not config.BOT_TOKEN:
