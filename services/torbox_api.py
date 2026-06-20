@@ -321,7 +321,7 @@ async def create_webdl(link: str):
     async with aiohttp.ClientSession() as session:
         form = aiohttp.FormData()
         form.add_field("link", link)
-        return await _post(session, "/webdl/createwebdl", data_body=form)
+        return await _post(session, "/webdl/createwebdownload", data_body=form)
 
 
 async def webdl_list(webdl_id=None):
@@ -345,7 +345,7 @@ async def request_webdl_link(webdl_id, file_id=None):
 async def control_webdl(webdl_id, operation: str):
     """פעולות שליטה ב-WebDL: 'delete', 'pause', 'resume'."""
     async with aiohttp.ClientSession() as session:
-        return await _post(session, "/webdl/controlwebdl",
+        return await _post(session, "/webdl/controlwebdownload",
                            json_body={"webdl_id": webdl_id, "operation": operation})
 
 
