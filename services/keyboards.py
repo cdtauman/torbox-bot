@@ -17,10 +17,18 @@ def main_menu(is_admin=False):
 
 def persistent_menu():
     keyboard = [
-        [KeyboardButton("🔍 חיפוש"), KeyboardButton("📡 ההורדות שלי")],
-        [KeyboardButton("⚙️ הגדרות"), KeyboardButton("ℹ️ עזרה")]
+        [KeyboardButton("🔍 חיפוש"), KeyboardButton("📥 הורדות ישירות")],
+        [KeyboardButton("📡 ההורדות שלי"), KeyboardButton("⚙️ הגדרות")],
+        [KeyboardButton("ℹ️ עזרה")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
+
+def debrid_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔍 חיפוש לפי שם (נסיוני)", callback_data="debrid:search")],
+        [InlineKeyboardButton("🔗 המרת קישור", callback_data="debrid:convert")],
+        [InlineKeyboardButton("🏠 ראשי", callback_data="menu:home")]
+    ])
 
 
 def cancel_search_keyboard():

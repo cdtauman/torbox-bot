@@ -125,3 +125,18 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(HELP, parse_mode="HTML", reply_markup=kb.back_home())
     else:
         await update.message.reply_text(HELP, parse_mode="HTML", reply_markup=kb.back_home())
+
+@require_role(config.ROLE_USER)
+async def show_debrid_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    clear_user_states(context)
+    text = (
+        "📥 <b>הורדות ישירות (Debrid)</b>\n\n"
+        "בחר אפשרות:\n"
+        "• <b>חיפוש לפי שם (נסיוני):</b> יחפש הורדות ישירות ל-Rapidgator באתר RLSBB.\n"
+        "• <b>המרת קישור:</b> שלח קישור פרימיום שיש לך (למשל Rapidgator) כדי להמיר אותו מיד דרך TorBox."
+    )
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text(text, parse_mode="HTML", reply_markup=kb.debrid_menu())
+    else:
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb.debrid_menu())

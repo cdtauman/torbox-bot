@@ -10,7 +10,7 @@ import logging
 import config
 import database as db
 from handlers.auth import require_role
-from services import torbox_api, prowlarr_api, parser, keyboards as kb, formatter as fmt
+from services import torbox_api, prowlarr_api, rlsbb_api, parser, keyboards as kb, formatter as fmt
 
 logger = logging.getLogger(__name__)
 _SEARCH_SEMAPHORE = asyncio.Semaphore(max(1, config.SEARCH_CONCURRENCY))
@@ -35,6 +35,40 @@ async def prompt_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔍 <b>מה לחפש?</b>\n\n"
         "שלח שם של סרט, סדרה, משחק או תוכנה.\n"
         "טיפ: אפשר להוסיף איכות, למשל <code>Dune 2160p</code>"
+    )
+    markup = kb.back_home()
+    if q:
+        await q.answer()
+        await q.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+    else:
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
+
+@require_role(config.ROLE_USER)
+async def prompt_debrid_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from handlers.menu import clear_user_states
+    clear_user_states(context)
+    context.user_data["awaiting_debrid_search"] = True
+    q = update.callback_query
+    text = (
+        "🔍 <b>חיפוש הורדות ישירות (RLSBB)</b>\n\n"
+        "שלח שם של סרט או סדרה כדי לחפש קישורי פרימיום (כמו Rapidgator)."
+    )
+    markup = kb.back_home()
+    if q:
+        await q.answer()
+        await q.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+    else:
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
+
+@require_role(config.ROLE_USER)
+async def prompt_debrid_convert(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from handlers.menu import clear_user_states
+    clear_user_states(context)
+    context.user_data["awaiting_debrid_convert"] = True
+    q = update.callback_query
+    text = (
+        "🔗 <b>המרת קישור פרימיום</b>\n\n"
+        "הדבק כאן קישור (למשל של Rapidgator או שרת נתמך אחר) והוא יומר להורדה ישירה דרך TorBox."
     )
     markup = kb.back_home()
     if q:
@@ -104,6 +138,40 @@ async def do_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # שמירת state
     context.user_data["query"] = query
     context.user_data["all_results"] = results
+    context.user_data["temp_filter"] = {}
+    user_db = await db.get_user(update.effective_user.id)
+    context.user_data["settings"] = user_db["settings"]
+
+    await _render_results(status_msg, context, page=0)
+
+@require_role(config.ROLE_USER)
+async def do_debrid_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.message.text.strip()
+    user = update.effective_user
+    context.user_data["awaiting_debrid_search"] = False
+    
+    logger.info(f"[DEBRID SEARCH] START | user={user.id} | query={query!r}")
+    status_msg = await update.message.reply_text("🔍 מחפש קישורים ישירים ב-RLSBB...", reply_markup=kb.cancel_search_keyboard())
+
+    try:
+        raw_results = await rlsbb_api.search(query)
+    except Exception as e:
+        logger.exception(f"[DEBRID SEARCH] Unexpected error | user={user.id} | query={query!r}")
+        await status_msg.edit_text(f"⚠️ שגיאה בחיפוש ב-RLSBB: {e}")
+        return
+
+    logger.info(f"[DEBRID SEARCH] DONE | user={user.id} | query={query!r} | total={len(raw_results)}")
+    await db.log_search(update.effective_user.id, query + " [RLSBB]", len(raw_results))
+
+    if not raw_results:
+        await status_msg.edit_text(
+            f"😕 לא נמצאו תוצאות ב-RLSBB עבור <b>{fmt.escape(query)}</b> או שלא נמצאו קישורים נתמכים (Rapidgator).\n"
+            "נסה ניסוח אחר.",
+            parse_mode="HTML", reply_markup=kb.back_home())
+        return
+
+    context.user_data["query"] = query + " [RLSBB]"
+    context.user_data["all_results"] = raw_results
     context.user_data["temp_filter"] = {}
     user_db = await db.get_user(update.effective_user.id)
     context.user_data["settings"] = user_db["settings"]

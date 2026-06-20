@@ -36,7 +36,11 @@ async def download_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         torrent_url = r.get("torrent_url")
         source = r.get("source")
 
-        if r.get("cached") and magnet:
+        if r.get("is_webdl") and magnet:
+            data = await torbox_api.create_webdl(magnet)
+            # WebDL endpoints return {"data": {"webdl_id": ...}}
+            is_webdl_download = True
+        elif r.get("cached") and magnet:
             data = await torbox_api.add_magnet(magnet)
         elif magnet and not r.get("generated_magnet"):
             data = await torbox_api.add_magnet(magnet)
@@ -63,8 +67,13 @@ async def download_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(f"⚠️ שגיאה: {e}", reply_markup=kb.back_home())
         return
 
-    torbox_id = (data or {}).get("torrent_id") or (data or {}).get("id")
-    await db.log_download(q.from_user.id, r["name"], r["size"], torbox_id, r["hash"])
+    is_webdl_download = r.get("is_webdl", False)
+    if is_webdl_download:
+        torbox_id = (data or {}).get("data", {}).get("webdl_id") or (data or {}).get("webdl_id")
+    else:
+        torbox_id = (data or {}).get("torrent_id") or (data or {}).get("id")
+        
+    await db.log_download(q.from_user.id, r["name"], r["size"], torbox_id, r.get("hash", ""))
 
     eta = "מיידית ⚡" if r["cached"] else "מספר דקות"
     await q.edit_message_text(
@@ -77,7 +86,7 @@ async def download_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=kb.main_menu(await _is_admin(q.from_user.id)))
 
     if torbox_id:
-        await _try_send_direct_link(q.message, torbox_id)
+        await _try_send_direct_link(q.message, torbox_id, is_webdl=is_webdl_download)
 
 
 # ───────────────────────── magnet ישיר ─────────────────────────
@@ -141,12 +150,40 @@ async def handle_torrent_file(update: Update, context: ContextTypes.DEFAULT_TYPE
                 pass
 
 
-async def _try_send_direct_link(message, torbox_id):
+# ───────────────────────── הורדה ישירה (Debrid) ─────────────────────────
+@require_role(config.ROLE_USER)
+async def handle_debrid_convert(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    link = update.message.text.strip()
+    from handlers.menu import clear_user_states
+    clear_user_states(context.user_data)
+    
+    status = await update.message.reply_text("📥 ממיר את הקישור ב-TorBox...")
+    try:
+        data = await torbox_api.create_webdl(link)
+    except Exception as e:
+        await status.edit_text(f"⚠️ שגיאה: {e}")
+        return
+        
+    torbox_id = (data or {}).get("data", {}).get("webdl_id") or (data or {}).get("webdl_id")
+    name = (data or {}).get("data", {}).get("name") or "WebDL Download"
+    await db.log_download(update.effective_user.id, name, 0, torbox_id, "")
+    await status.edit_text(
+        f"✅ נוסף בהצלחה להורדות ישירות!\n📋 {fmt.escape(name[:60])}\n\n"
+        f"עקוב ב'ההורדות שלי' 📡",
+        parse_mode="HTML")
+
+    if torbox_id:
+        await _try_send_direct_link(update.message, torbox_id, is_webdl=True)
+
+async def _try_send_direct_link(message, torbox_id, is_webdl=False):
     # Try up to 3 times to get the link if the torrent is cached, since TorBox API might take a few seconds to process
     for attempt in range(3):
         try:
             await asyncio.sleep(1.5)
-            dl_data = await torbox_api.request_download_link(torbox_id)
+            if is_webdl:
+                dl_data = await torbox_api.request_webdl_link(torbox_id)
+            else:
+                dl_data = await torbox_api.request_download_link(torbox_id)
             link = None
             if isinstance(dl_data, str):
                 link = dl_data

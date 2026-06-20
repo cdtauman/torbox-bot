@@ -30,21 +30,35 @@ async def show_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         edit = update.message.reply_text
 
     try:
-        items = await torbox_api.my_list()
+        torrents = await torbox_api.my_list()
+        webdls = await torbox_api.webdl_list()
     except Exception as e:
         await edit(f"⚠️ שגיאה בטעינת ההורדות: {e}", reply_markup=kb.back_home())
         return
 
-    if isinstance(items, dict):
-        items = [items]
-    items = items or []
+    if isinstance(torrents, dict):
+        torrents = [torrents]
+    torrents = torrents or []
+
+    if isinstance(webdls, dict):
+        webdls = [webdls]
+    webdls = webdls or []
+    for w in webdls:
+        w["is_webdl"] = True
+        
+    items = torrents + webdls
 
     text = fmt.status_list(items)
     btn_items = []
     for it in items:
-        tid = it.get("id") or it.get("torrent_id")
+        is_webdl = it.get("is_webdl", False)
+        tid = str(it.get("id") or it.get("torrent_id") or it.get("webdl_id"))
+        if is_webdl:
+            tid = f"w_{tid}"
+            
         name = it.get("name", "?")
-        finished = it.get("download_finished") or it.get("download_present") or \
+        # WebDL uses download_state or similar, but progress == 1 works
+        finished = it.get("download_finished") or it.get("download_present") or it.get("download_state") == "completed" or \
                    (it.get("progress", 0) or 0) >= 1
         btn_items.append((tid, name, finished))
 
@@ -57,9 +71,14 @@ async def get_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """link:<torbox_id> — מבקש קישור הורדה ישיר."""
     q = update.callback_query
     await q.answer("🔗 מכין קישור...")
-    tid = q.data.split(":")[1]
+    tid_raw = q.data.split(":")[1]
+    is_webdl = tid_raw.startswith("w_")
+    tid = tid_raw[2:] if is_webdl else tid_raw
     try:
-        data = await torbox_api.request_download_link(tid)
+        if is_webdl:
+            data = await torbox_api.request_webdl_link(tid)
+        else:
+            data = await torbox_api.request_download_link(tid)
         link = None
         if isinstance(data, str):
             link = data
@@ -80,9 +99,14 @@ async def get_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """cancel:<torbox_id> — מבטל/מוחק הורדה."""
     q = update.callback_query
-    tid = q.data.split(":")[1]
+    tid_raw = q.data.split(":")[1]
+    is_webdl = tid_raw.startswith("w_")
+    tid = tid_raw[2:] if is_webdl else tid_raw
     try:
-        await torbox_api.delete_torrent(int(tid))
+        if is_webdl:
+            await torbox_api.delete_webdl(tid)
+        else:
+            await torbox_api.delete_torrent(int(tid))
         await q.answer("❌ ההורדה בוטלה")
     except Exception as e:
         await q.answer(f"שגיאה: {e}", show_alert=True)

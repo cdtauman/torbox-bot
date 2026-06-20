@@ -66,6 +66,8 @@ async def log_all_updates(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def clear_user_states(user_data: dict):
     user_data["awaiting_broadcast"] = False
     user_data["awaiting_search"] = False
+    user_data["awaiting_debrid_search"] = False
+    user_data["awaiting_debrid_convert"] = False
     search_task = user_data.get("search_task")
     if search_task and not search_task.done():
         try:
@@ -94,9 +96,20 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await admin.do_broadcast(update, context)
         return
 
+    # הורדות ישירות
+    if context.user_data.get("awaiting_debrid_search"):
+        await search.do_debrid_search(update, context)
+        return
+    if context.user_data.get("awaiting_debrid_convert"):
+        await download.handle_debrid_convert(update, context)
+        return
+
     # בדיקת כפתורי מקלדת קבועה
     if text == "🔍 חיפוש":
         await search.prompt_search(update, context)
+        return
+    elif text == "📥 הורדות ישירות":
+        await menu.show_debrid_menu(update, context)
         return
     elif text == "📡 ההורדות שלי":
         await status.show_status(update, context)
@@ -175,6 +188,12 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return await search.show_item(update, context)
         if data == "results:back":
             return await search.back_to_results(update, context)
+            
+        # ─── Debrid ───
+        if data == "debrid:search":
+            return await search.prompt_debrid_search(update, context)
+        if data == "debrid:convert":
+            return await search.prompt_debrid_convert(update, context)
 
         # ─── הורדה ───
         if data.startswith("dl:"):
