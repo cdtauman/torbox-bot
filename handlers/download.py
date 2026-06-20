@@ -4,6 +4,8 @@ handlers/download.py — הוספת הורדות ל-TorBox:
 """
 import os
 import tempfile
+import asyncio
+import uuid
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -30,15 +32,22 @@ async def download_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(msg)
 
     try:
-        if r.get("cached") and r.get("magnet"):
-            data = await torbox_api.add_magnet(r["magnet"])
-        elif r.get("magnet") and not r.get("generated_magnet"):
-            data = await torbox_api.add_magnet(r["magnet"])
-        elif r.get("source") == "prowlarr" and r.get("torrent_url"):
-            filename, content = await prowlarr_api.fetch_torrent(r["torrent_url"])
-            data = await torbox_api.add_torrent_file(filename, content)
-        elif r.get("magnet"):
-            data = await torbox_api.add_magnet(r["magnet"])
+        magnet = r.get("magnet")
+        torrent_url = r.get("torrent_url")
+        source = r.get("source")
+
+        if r.get("cached") and magnet:
+            data = await torbox_api.add_magnet(magnet)
+        elif magnet and not r.get("generated_magnet"):
+            data = await torbox_api.add_magnet(magnet)
+        elif source == "prowlarr" and torrent_url:
+            try:
+                filename, content = await prowlarr_api.fetch_torrent(torrent_url)
+                data = await torbox_api.add_torrent_file(filename, content)
+            except prowlarr_api.MagnetRedirect as mr:
+                data = await torbox_api.add_magnet(mr.magnet_url)
+        elif magnet:
+            data = await torbox_api.add_magnet(magnet)
         elif r.get("hash"):
             data = await torbox_api.add_hash(r["hash"])
         else:
@@ -68,19 +77,7 @@ async def download_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=kb.main_menu(await _is_admin(q.from_user.id)))
 
     if torbox_id:
-        try:
-            import asyncio
-            await asyncio.sleep(1)
-            dl_data = await torbox_api.request_download_link(torbox_id)
-            link = dl_data if isinstance(dl_data, str) else (dl_data or {}).get("link") or str(dl_data)
-            if link:
-                await q.message.reply_text(
-                    f"🔗 <b>קישור הורדה ישיר מוכן עבורך:</b>\n\n{link}\n\n"
-                    "⚠️ הקישור זמני — הורד בקרוב.",
-                    parse_mode="HTML", disable_web_page_preview=True
-                )
-        except Exception:
-            pass
+        await _try_send_direct_link(q.message, torbox_id)
 
 
 # ───────────────────────── magnet ישיר ─────────────────────────
@@ -102,63 +99,67 @@ async def handle_magnet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML")
 
     if torbox_id:
-        try:
-            import asyncio
-            await asyncio.sleep(1)
-            dl_data = await torbox_api.request_download_link(torbox_id)
-            link = dl_data if isinstance(dl_data, str) else (dl_data or {}).get("link") or str(dl_data)
-            if link:
-                await update.message.reply_text(
-                    f"🔗 <b>קישור הורדה ישיר מוכן עבורך:</b>\n\n{link}\n\n"
-                    "⚠️ הקישור זמני — הורד בקרוב.",
-                    parse_mode="HTML", disable_web_page_preview=True
-                )
-        except Exception:
-            pass
+        await _try_send_direct_link(update.message, torbox_id)
 
 
 # ───────────────────────── קובץ .torrent ─────────────────────────
 @require_role(config.ROLE_USER)
 async def handle_torrent_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     doc = update.message.document
-    if not doc.file_name.lower().endswith(".torrent"):
+    if not doc or not doc.file_name or not doc.file_name.lower().endswith(".torrent"):
         return
     status = await update.message.reply_text("📥 מעבד את קובץ ה-torrent...")
     path = ""
     try:
         tg_file = await doc.get_file()
         tmp_dir = tempfile.gettempdir()
-        path = os.path.join(tmp_dir, doc.file_name)
+        safe_filename = os.path.basename(doc.file_name) or "download.torrent"
+        # Avoid race conditions and file collisions between concurrent users
+        unique_filename = f"{uuid.uuid4()}_{safe_filename}"
+        path = os.path.join(tmp_dir, unique_filename)
         await tg_file.download_to_drive(path)
 
         with open(path, "rb") as f:
-            data = await torbox_api.add_torrent_file(doc.file_name, f.read())
-        torbox_id = data.get("torrent_id") or data.get("id")
-        name = data.get("name", doc.file_name)
+            data = await torbox_api.add_torrent_file(safe_filename, f.read())
+        torbox_id = (data or {}).get("torrent_id") or (data or {}).get("id")
+        name = (data or {}).get("name") or safe_filename
         await db.log_download(update.effective_user.id, name, 0, torbox_id, "")
         await status.edit_text(f"✅ נוסף בהצלחה!\n📋 {fmt.escape(name[:60])}", parse_mode="HTML")
 
         if torbox_id:
-            try:
-                import asyncio
-                await asyncio.sleep(1)
-                dl_data = await torbox_api.request_download_link(torbox_id)
-                link = dl_data if isinstance(dl_data, str) else (dl_data or {}).get("link") or str(dl_data)
-                if link:
-                    await update.message.reply_text(
-                        f"🔗 <b>קישור הורדה ישיר מוכן עבורך:</b>\n\n{link}\n\n"
-                        "⚠️ הקישור זמני — הורד בקרוב.",
-                        parse_mode="HTML", disable_web_page_preview=True
-                    )
-            except Exception:
-                pass
+            await _try_send_direct_link(update.message, torbox_id)
+
     except torbox_api.TorBoxError as e:
         await status.edit_text(f"⚠️ {e}")
     except Exception as e:
         await status.edit_text(f"⚠️ שגיאה בעיבוד הקובץ: {e}")
     finally:
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+
+
+async def _try_send_direct_link(message, torbox_id):
+    # Try up to 3 times to get the link if the torrent is cached, since TorBox API might take a few seconds to process
+    for attempt in range(3):
         try:
-            os.remove(path)
+            await asyncio.sleep(1.5)
+            dl_data = await torbox_api.request_download_link(torbox_id)
+            link = None
+            if isinstance(dl_data, str):
+                link = dl_data
+            elif isinstance(dl_data, dict):
+                link = dl_data.get("link")
+
+            if link:
+                await message.reply_text(
+                    f"🔗 <b>קישור הורדה ישיר מוכן עבורך:</b>\n\n{link}\n\n"
+                    "⚠️ הקישור זמני — הורד בקרוב.",
+                    parse_mode="HTML", disable_web_page_preview=True
+                )
+                return
         except Exception:
             pass
 

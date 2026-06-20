@@ -23,6 +23,13 @@ class ProwlarrError(Exception):
     pass
 
 
+class MagnetRedirect(Exception):
+    """שגיאה המציינת שההורדה הופנתה ל-magnet link."""
+    def __init__(self, magnet_url: str):
+        self.magnet_url = magnet_url
+        super().__init__(magnet_url)
+
+
 def _headers():
     return {
         "X-Api-Key": config.PROWLARR_API_KEY,
@@ -153,16 +160,33 @@ async def fetch_torrent(download_url: str) -> tuple[str, bytes]:
     if not download_url:
         raise ProwlarrError("לתוצאה אין קישור torrent להורדה")
 
+    # If the download URL itself is already a magnet link, raise immediately
+    if download_url.lower().startswith("magnet:"):
+        raise MagnetRedirect(download_url)
+
     timeout = aiohttp.ClientTimeout(total=config.PROWLARR_TIMEOUT)
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.get(_absolute_url(download_url), headers=_headers()) as resp:
-            data = await resp.read()
-            if resp.status != 200:
-                detail = data.decode("utf-8", errors="replace")[:300]
-                raise ProwlarrError(f"לא הצלחתי להוריד torrent מ-Prowlarr: {detail or resp.status}")
+        try:
+            async with session.get(_absolute_url(download_url), headers=_headers(), allow_redirects=True) as resp:
+                final_url = str(resp.url)
+                if final_url.startswith("magnet:"):
+                    raise MagnetRedirect(final_url)
 
-            filename = _filename_from_headers(resp.headers) or "prowlarr-result.torrent"
-            return filename, data
+                data = await resp.read()
+                if resp.status != 200:
+                    detail = data.decode("utf-8", errors="replace")[:300]
+                    raise ProwlarrError(f"לא הצלחתי להוריד torrent מ-Prowlarr: {detail or resp.status}")
+
+                filename = _filename_from_headers(resp.headers) or "prowlarr-result.torrent"
+                return filename, data
+        except MagnetRedirect:
+            raise
+        except Exception as e:
+            err_msg = str(e)
+            match = re.search(r'(magnet:\?xt=urn:btih:[^\s\'"\>]+)', err_msg, re.IGNORECASE)
+            if match:
+                raise MagnetRedirect(match.group(1))
+            raise ProwlarrError(f"לא הצלחתי להוריד torrent מ-Prowlarr: {e}")
 
 
 def _absolute_url(url: str) -> str:

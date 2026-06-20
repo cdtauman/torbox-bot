@@ -60,11 +60,19 @@ async def get_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tid = q.data.split(":")[1]
     try:
         data = await torbox_api.request_download_link(tid)
-        link = data if isinstance(data, str) else (data or {}).get("link") or str(data)
-        await q.message.reply_text(
-            f"🔗 <b>קישור הורדה:</b>\n\n{link}\n\n"
-            "⚠️ הקישור זמני — הורד בקרוב.",
-            parse_mode="HTML", disable_web_page_preview=True)
+        link = None
+        if isinstance(data, str):
+            link = data
+        elif isinstance(data, dict):
+            link = data.get("link")
+
+        if link:
+            await q.message.reply_text(
+                f"🔗 <b>קישור הורדה:</b>\n\n{link}\n\n"
+                "⚠️ הקישור זמני — הורד בקרוב.",
+                parse_mode="HTML", disable_web_page_preview=True)
+        else:
+            await q.answer("⚠️ לא נמצא קישור הורדה תקין עבור טורנט זה.", show_alert=True)
     except Exception as e:
         await q.answer(f"שגיאה: {e}", show_alert=True)
 
