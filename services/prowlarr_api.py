@@ -167,6 +167,7 @@ async def fetch_torrent(download_url: str) -> tuple[str, bytes]:
 
 def _absolute_url(url: str) -> str:
     if url.startswith(("http://", "https://")):
+        url = url.replace("127.0.0.1:9696", "prowlarr:9696").replace("localhost:9696", "prowlarr:9696")
         return url
     return _base_url(url)
 
