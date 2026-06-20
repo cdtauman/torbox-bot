@@ -170,8 +170,9 @@ async def do_debrid_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML", reply_markup=kb.back_home())
         return
 
+    results = [parser.normalize(r) for r in raw_results]
     context.user_data["query"] = query + " [RLSBB]"
-    context.user_data["all_results"] = raw_results
+    context.user_data["all_results"] = results
     context.user_data["temp_filter"] = {}
     user_db = await db.get_user(update.effective_user.id)
     context.user_data["settings"] = user_db["settings"]

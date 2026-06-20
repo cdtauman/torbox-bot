@@ -28,13 +28,15 @@ def normalize(raw: dict) -> dict:
     magnet = raw.get("magnet") or raw.get("magnet_link") or raw.get("magnetUrl") or ""
     torrent_url = raw.get("torrent_url") or raw.get("download_url") or raw.get("downloadUrl") or ""
 
-    if magnet and not magnet.startswith("magnet:"):
+    is_webdl = bool(raw.get("is_webdl", False))
+
+    if magnet and not magnet.startswith("magnet:") and not is_webdl:
         if not torrent_url:
             torrent_url = magnet
         magnet = ""
 
     generated_magnet = False
-    if not thash and magnet:
+    if not thash and magnet and not is_webdl:
         m = re.search(r"(?i)urn:btih:([a-z0-9]{32,40})", magnet)
         if m:
             thash = m.group(1).lower()
@@ -57,7 +59,7 @@ def normalize(raw: dict) -> dict:
         "hash": thash,
         "magnet": magnet,
         "generated_magnet": generated_magnet,
-        "torrent_url": raw.get("torrent_url") or raw.get("download_url") or raw.get("downloadUrl") or "",
+        "torrent_url": torrent_url,
         "cached": cached,
         "owned": owned,
         "age": str(age),
@@ -65,6 +67,7 @@ def normalize(raw: dict) -> dict:
         "quality": detect_quality(name),
         "category": detect_category(name),
         "language": detect_language(name),
+        "is_webdl": is_webdl,
     }
 
 

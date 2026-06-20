@@ -108,7 +108,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "🔍 חיפוש":
         await search.prompt_search(update, context)
         return
-    elif text == "📥 הורדות ישירות":
+    elif text == "📥 חיפוש והורדות Debrid":
         await menu.show_debrid_menu(update, context)
         return
     elif text == "📡 ההורדות שלי":

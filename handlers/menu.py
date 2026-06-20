@@ -130,7 +130,7 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_debrid_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     clear_user_states(context)
     text = (
-        "📥 <b>הורדות ישירות (Debrid)</b>\n\n"
+        "📥 <b>חיפוש והורדות Debrid</b>\n\n"
         "בחר אפשרות:\n"
         "• <b>חיפוש לפי שם (נסיוני):</b> יחפש הורדות ישירות ל-Rapidgator באתר RLSBB.\n"
         "• <b>המרת קישור:</b> שלח קישור פרימיום שיש לך (למשל Rapidgator) כדי להמיר אותו מיד דרך TorBox."
