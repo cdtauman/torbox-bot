@@ -17,7 +17,7 @@ def main_menu(is_admin=False):
 
 def persistent_menu():
     keyboard = [
-        [KeyboardButton("🔍 חיפוש"), KeyboardButton("📥 חיפוש והורדות Debrid")],
+        [KeyboardButton("🔍 חיפוש"), KeyboardButton("📥 חיפוש והורדה ישירה (Debrid)")],
         [KeyboardButton("📡 ההורדות שלי"), KeyboardButton("⚙️ הגדרות")],
         [KeyboardButton("ℹ️ עזרה")]
     ]

@@ -35,6 +35,8 @@ HELP = (
 def clear_user_states(context):
     context.user_data["awaiting_broadcast"] = False
     context.user_data["awaiting_search"] = False
+    context.user_data["awaiting_debrid_search"] = False
+    context.user_data["awaiting_debrid_convert"] = False
     search_task = context.user_data.get("search_task")
     if search_task and not search_task.done():
         try:
@@ -130,7 +132,7 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_debrid_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     clear_user_states(context)
     text = (
-        "📥 <b>חיפוש והורדות Debrid</b>\n\n"
+        "📥 <b>חיפוש והורדה ישירה (Debrid)</b>\n\n"
         "בחר אפשרות:\n"
         "• <b>חיפוש לפי שם (נסיוני):</b> יחפש הורדות ישירות ל-Rapidgator באתר RLSBB.\n"
         "• <b>המרת קישור:</b> שלח קישור פרימיום שיש לך (למשל Rapidgator) כדי להמיר אותו מיד דרך TorBox."

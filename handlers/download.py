@@ -36,10 +36,13 @@ async def download_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         torrent_url = r.get("torrent_url")
         source = r.get("source")
 
-        if r.get("is_webdl") and magnet:
-            data = await torbox_api.create_webdl(magnet)
-            # WebDL endpoints return {"data": {"webdl_id": ...}}
-            is_webdl_download = True
+        if r.get("is_webdl"):
+            webdl_link = magnet or torrent_url
+            if webdl_link:
+                data = await torbox_api.create_webdl(webdl_link)
+                is_webdl_download = True
+            else:
+                raise ValueError("לא נמצא קישור תקין להורדה")
         elif r.get("cached") and magnet:
             data = await torbox_api.add_magnet(magnet)
         elif magnet and not r.get("generated_magnet"):
@@ -155,7 +158,7 @@ async def handle_torrent_file(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def handle_debrid_convert(update: Update, context: ContextTypes.DEFAULT_TYPE):
     link = update.message.text.strip()
     from handlers.menu import clear_user_states
-    clear_user_states(context.user_data)
+    clear_user_states(context)
     
     status = await update.message.reply_text("📥 ממיר את הקישור ב-TorBox...")
     try:

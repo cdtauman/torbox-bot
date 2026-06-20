@@ -18,17 +18,22 @@ def results_page(query, page_items, page, total_pages, total_results, active_fil
     for pos, (_gidx, r) in enumerate(page_items):
         e = emojis[pos] if pos < len(emojis) else f"{pos+1}."
         badges = []
-        q = parser.quality_badge(r["quality"])
+        q = parser.quality_badge(r.get("quality", "unknown"))
         if q:
             badges.append(q)
-        if r["cached"]:
+        if r.get("is_webdl"):
+            badges.append("📥 ישיר Debrid")
+        elif r.get("cached"):
             badges.append("⚡ בקאש")
-        if r["owned"]:
+        if r.get("owned"):
             badges.append("✓ ברשותך")
         badge_str = "  •  ".join(badges)
 
         lines.append(f"{e} <b>{escape(r['name'][:70])}</b>")
-        meta = f"   📦 {parser.human_size(r['size'])}  🌱 {r['seeders']}  🔴 {r['leechers']}"
+        if r.get("is_webdl"):
+            meta = f"   📦 {parser.human_size(r['size'])}"
+        else:
+            meta = f"   📦 {parser.human_size(r['size'])}  🌱 {r['seeders']}  🔴 {r['leechers']}"
         if badge_str:
             meta += f"  •  {badge_str}"
         lines.append(meta)
@@ -46,19 +51,24 @@ def results_page(query, page_items, page, total_pages, total_results, active_fil
 def item_detail(r):
     lines = [f"📋 <b>{escape(r['name'])}</b>\n"]
     lines.append(f"📦 גודל:    {parser.human_size(r['size'])}")
-    lines.append(f"🌱 זרעים:   {r['seeders']}")
-    lines.append(f"🔴 מדיחים:  {r['leechers']}")
-    q = config.QUALITY_LABELS.get(r["quality"])
-    if q and r["quality"] != "unknown":
+    if not r.get("is_webdl"):
+        lines.append(f"🌱 זרעים:   {r['seeders']}")
+        lines.append(f"🔴 מדיחים:  {r['leechers']}")
+    q = config.QUALITY_LABELS.get(r.get("quality", "unknown"))
+    if q and r.get("quality", "unknown") != "unknown":
         lines.append(f"🎬 איכות:   {q}")
-    cat = config.CATEGORY_LABELS.get(r["category"], "")
-    if cat and r["category"] != "all":
+    cat = config.CATEGORY_LABELS.get(r.get("category", "all"), "")
+    if cat and r.get("category", "all") != "all":
         lines.append(f"📂 קטגוריה: {cat}")
-    if r["age"]:
+    if r.get("age"):
         lines.append(f"📅 תאריך:   {escape(r['age'][:16])}")
-    if r["tracker"]:
+    if r.get("tracker"):
         lines.append(f"🔎 מקור:    {escape(r['tracker'])}")
-    status = "⚡ כבר בקאש — הורדה מיידית!" if r["cached"] else "📥 יורד לשרת TorBox בעת הוספה"
+    
+    if r.get("is_webdl"):
+        status = "📥 הורדה ישירה דרך TorBox (Debrid)"
+    else:
+        status = "⚡ כבר בקאש — הורדה מיידית!" if r.get("cached") else "📥 יורד לשרת TorBox בעת הוספה"
     lines.append(f"\n{status}")
     return "\n".join(lines)
 
