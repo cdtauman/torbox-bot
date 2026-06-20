@@ -296,6 +296,19 @@ async def check_cached(hashes):
 # ───────────────────────── קישור הורדה ─────────────────────────
 async def request_download_link(torrent_id, file_id=None):
     """מבקש קישור הורדה ישיר (זמני) לטורנט שהושלם."""
+    if file_id is None:
+        try:
+            torrent = await my_list(torrent_id)
+            if torrent:
+                if isinstance(torrent, list):
+                    torrent = torrent[0]
+                files = torrent.get("files", [])
+                if files:
+                    largest_file = max(files, key=lambda f: f.get("size", 0))
+                    file_id = largest_file.get("id")
+        except Exception as e:
+            logger.warning(f"Failed to automatically detect largest file ID for torrent {torrent_id}: {e}")
+
     params = {"token": config.TORBOX_API_KEY, "torrent_id": str(torrent_id)}
     if file_id is not None:
         params["file_id"] = str(file_id)
@@ -337,7 +350,20 @@ async def webdl_list(webdl_id=None):
 
 async def request_webdl_link(webdl_id, file_id=None):
     """מבקש קישור הורדה ישיר (זמני) ל-WebDL שהושלם."""
-    params = {"token": config.TORBOX_API_KEY, "webdl_id": str(webdl_id)}
+    if file_id is None:
+        try:
+            webdl = await webdl_list(webdl_id)
+            if webdl:
+                if isinstance(webdl, list):
+                    webdl = webdl[0]
+                files = webdl.get("files", [])
+                if files:
+                    largest_file = max(files, key=lambda f: f.get("size", 0))
+                    file_id = largest_file.get("id")
+        except Exception as e:
+            logger.warning(f"Failed to automatically detect largest file ID for webdl {webdl_id}: {e}")
+
+    params = {"token": config.TORBOX_API_KEY, "web_id": str(webdl_id)}
     if file_id is not None:
         params["file_id"] = str(file_id)
     async with aiohttp.ClientSession() as session:
