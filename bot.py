@@ -5,7 +5,7 @@ bot.py — נקודת הכניסה הראשית.
 """
 import logging
 
-from telegram import Update
+from telegram import Update, BotCommand
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     ContextTypes, filters,
@@ -15,6 +15,7 @@ import config
 import database as db
 from handlers import menu, search, filters as filt, download, status, settings, admin
 from handlers.auth import require_role
+from services import keyboards as kb
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -62,6 +63,19 @@ async def log_all_updates(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"[UPDATE] user={uid} ({uname}) | type={list(update.parse_mode_entities() if hasattr(update,'parse_mode_entities') else [])} update_id={update.update_id}")
 
 
+def clear_user_states(user_data: dict):
+    user_data["awaiting_broadcast"] = False
+    user_data["awaiting_search"] = False
+    search_task = user_data.get("search_task")
+    if search_task and not search_task.done():
+        try:
+            search_task.cancel()
+            logger.info("Active search task cancelled.")
+        except Exception as e:
+            logger.warning(f"Error cancelling search task: {e}")
+    user_data["search_task"] = None
+
+
 # ───────────────────────── ראוטר טקסט חופשי ─────────────────────────
 async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -80,6 +94,23 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await admin.do_broadcast(update, context)
         return
 
+    # בדיקת כפתורי מקלדת קבועה
+    if text == "🔍 חיפוש":
+        await search.prompt_search(update, context)
+        return
+    elif text == "📡 ההורדות שלי":
+        await status.show_status(update, context)
+        return
+    elif text == "⚙️ הגדרות":
+        await settings.show_settings(update, context)
+        return
+    elif text == "ℹ️ עזרה":
+        await menu.show_help(update, context)
+        return
+    elif text in ("❌ ביטול", "ביטול"):
+        await cmd_cancel(update, context)
+        return
+
     # magnet?
     if text.lower().startswith("magnet:?"):
         logger.debug(f"[ROUTER] → handle_magnet (user={user.id})")
@@ -92,9 +123,11 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["awaiting_broadcast"] = False
-    context.user_data["awaiting_search"] = False
-    await update.message.reply_text("בוטל. שלח /start לתפריט הראשי.")
+    clear_user_states(context.user_data)
+    await update.message.reply_text(
+        "❌ הפעולה בוטלה. הוחזרת לתפריט הראשי.",
+        reply_markup=kb.persistent_menu()
+    )
 
 
 # ───────────────────────── ראוטר כפתורים ─────────────────────────
@@ -111,6 +144,16 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
+        # ─── ביטול חיפוש ───
+        if data == "search:cancel":
+            clear_user_states(context.user_data)
+            await q.answer("❌ החיפוש בוטל")
+            try:
+                await q.edit_message_text("❌ החיפוש בוטל. שלח חיפוש חדש או השתמש בתפריט.")
+            except Exception:
+                pass
+            return
+
         # ─── תפריטים ───
         if data == "menu:home":
             return await menu.show_home(update, context)
@@ -198,6 +241,19 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def post_init(application: Application):
     await db.init_db()
     logger.info("Database initialized.")
+    
+    # רישום תפריט הפקודות בטלגרם
+    commands = [
+        BotCommand("start", "תפריט ראשי"),
+        BotCommand("search", "חיפוש טורנטים"),
+        BotCommand("downloads", "ההורדות שלי"),
+        BotCommand("settings", "הגדרות"),
+        BotCommand("help", "עזרה"),
+        BotCommand("admin", "פאנל ניהול"),
+        BotCommand("cancel", "ביטול פעולה")
+    ]
+    await application.bot.set_my_commands(commands)
+    logger.info("Bot commands registered.")
 
 
 def main():
@@ -214,6 +270,11 @@ def main():
 
     # פקודות
     app.add_handler(CommandHandler("start", menu.cmd_start))
+    app.add_handler(CommandHandler("search", search.prompt_search))
+    app.add_handler(CommandHandler("downloads", status.show_status))
+    app.add_handler(CommandHandler("settings", settings.show_settings))
+    app.add_handler(CommandHandler("help", menu.show_help))
+    app.add_handler(CommandHandler("admin", admin.show_admin))
     app.add_handler(CommandHandler("cancel", cmd_cancel))
 
     # קבצי torrent

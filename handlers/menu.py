@@ -6,7 +6,7 @@ from telegram.ext import ContextTypes
 
 import config
 import database as db
-from handlers.auth import get_role, is_admin
+from handlers.auth import get_role, is_admin, require_role
 from services import keyboards as kb
 
 WELCOME = (
@@ -32,7 +32,20 @@ HELP = (
 )
 
 
+def clear_user_states(context):
+    context.user_data["awaiting_broadcast"] = False
+    context.user_data["awaiting_search"] = False
+    search_task = context.user_data.get("search_task")
+    if search_task and not search_task.done():
+        try:
+            search_task.cancel()
+        except Exception:
+            pass
+    context.user_data["search_task"] = None
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    clear_user_states(context)
     user = update.effective_user
     existing = await db.get_user(user.id)
     if not existing:
@@ -55,8 +68,15 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🚫 חשבונך הושהה.")
         return
 
+    # Send persistent bottom keyboard
     await update.message.reply_text(
-        WELCOME, parse_mode="HTML", reply_markup=kb.main_menu(is_admin(role)))
+        WELCOME, parse_mode="HTML", reply_markup=kb.persistent_menu())
+    
+    # If admin, inform they have admin panel in commands
+    if is_admin(role):
+        await update.message.reply_text(
+            "👑 פאנל הניהול זמין עבורך בתפריט הפקודות בצד או בפקודה /admin"
+        )
 
 
 async def _notify_admins_new_user(context, user):
@@ -76,16 +96,32 @@ async def _notify_admins_new_user(context, user):
             pass
 
 
+@require_role(config.ROLE_USER)
 async def show_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """מציג את התפריט הראשי (מתוך callback)."""
+    """מציג את התפריט הראשי."""
+    clear_user_states(context)
     q = update.callback_query
-    await q.answer()
-    role = await get_role(q.from_user.id)
-    await q.edit_message_text(
-        WELCOME, parse_mode="HTML", reply_markup=kb.main_menu(is_admin(role)))
+    if q:
+        await q.answer()
+        role = await get_role(q.from_user.id)
+        await q.edit_message_text(
+            WELCOME, parse_mode="HTML", reply_markup=kb.main_menu(is_admin(role)))
+    else:
+        role = await get_role(update.effective_user.id)
+        await update.message.reply_text(
+            WELCOME, parse_mode="HTML", reply_markup=kb.persistent_menu())
+        if is_admin(role):
+            await update.message.reply_text(
+                "👑 פאנל הניהול זמין עבורך בתפריט הפקודות בצד או בפקודה /admin"
+            )
 
 
+@require_role(config.ROLE_USER)
 async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    clear_user_states(context)
     q = update.callback_query
-    await q.answer()
-    await q.edit_message_text(HELP, parse_mode="HTML", reply_markup=kb.back_home())
+    if q:
+        await q.answer()
+        await q.edit_message_text(HELP, parse_mode="HTML", reply_markup=kb.back_home())
+    else:
+        await update.message.reply_text(HELP, parse_mode="HTML", reply_markup=kb.back_home())

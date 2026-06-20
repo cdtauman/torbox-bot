@@ -17,16 +17,31 @@ _SEARCH_SEMAPHORE = asyncio.Semaphore(max(1, config.SEARCH_CONCURRENCY))
 
 
 # ───────────────────────── בקשת חיפוש ─────────────────────────
+@require_role(config.ROLE_USER)
 async def prompt_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """לחיצה על 'חיפוש' — מבקש מהמשתמש להקליד."""
-    q = update.callback_query
-    await q.answer()
+    context.user_data["awaiting_broadcast"] = False
+    search_task = context.user_data.get("search_task")
+    if search_task and not search_task.done():
+        try:
+            search_task.cancel()
+        except Exception:
+            pass
+    context.user_data["search_task"] = None
+
     context.user_data["awaiting_search"] = True
-    await q.edit_message_text(
+    q = update.callback_query
+    text = (
         "🔍 <b>מה לחפש?</b>\n\n"
         "שלח שם של סרט, סדרה, משחק או תוכנה.\n"
-        "טיפ: אפשר להוסיף איכות, למשל <code>Dune 2160p</code>",
-        parse_mode="HTML", reply_markup=kb.back_home())
+        "טיפ: אפשר להוסיף איכות, למשל <code>Dune 2160p</code>"
+    )
+    markup = kb.back_home()
+    if q:
+        await q.answer()
+        await q.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+    else:
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
 
 
 # ───────────────────────── ביצוע חיפוש ─────────────────────────
@@ -36,13 +51,26 @@ async def do_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.message.text.strip()
     user = update.effective_user
     context.user_data["awaiting_search"] = False
+    
+    # ביטול משימת חיפוש קודמת אם קיימת
+    search_task = context.user_data.get("search_task")
+    if search_task and not search_task.done():
+        try:
+            search_task.cancel()
+        except Exception:
+            pass
+
+    context.user_data["search_task"] = asyncio.current_task()
     logger.info(f"[SEARCH] START | user={user.id} | query={query!r}")
 
-    status_msg = await update.message.reply_text("🔍 מחפש בכל המקורות...")
+    status_msg = await update.message.reply_text("🔍 מחפש בכל המקורות...", reply_markup=kb.cancel_search_keyboard())
 
     try:
         async with _SEARCH_SEMAPHORE:
             raw_results = await _search_provider(query)
+    except asyncio.CancelledError:
+        logger.info(f"[SEARCH] CANCELLED | user={user.id} | query={query!r}")
+        return
     except prowlarr_api.ProwlarrError as e:
         logger.error(f"[SEARCH] ProwlarrError | user={user.id} | query={query!r} | error={e}")
         await status_msg.edit_text(f"⚠️ שגיאה בחיפוש:\n{e}")
@@ -55,6 +83,9 @@ async def do_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.exception(f"[SEARCH] Unexpected error | user={user.id} | query={query!r}")
         await status_msg.edit_text(f"⚠️ שגיאה לא צפויה: {e}")
         return
+    finally:
+        if context.user_data.get("search_task") == asyncio.current_task():
+            context.user_data["search_task"] = None
 
     # נרמול
     results = [parser.normalize(r) for r in raw_results]

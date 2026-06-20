@@ -2,22 +2,29 @@
 services/keyboards.py — כל המקלדות (כפתורים) במקום אחד.
 מבנה callback_data:  "פעולה:פרמטר"  (למשל "dl:3", "sort:size", "page:2")
 """
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 
 import config
 
 
 # ───────────────────────── תפריט ראשי ─────────────────────────
 def main_menu(is_admin=False):
-    rows = [
-        [InlineKeyboardButton("🔍 חיפוש", callback_data="menu:search"),
-         InlineKeyboardButton("📡 ההורדות שלי", callback_data="menu:status")],
-        [InlineKeyboardButton("⚙️ הגדרות", callback_data="menu:settings"),
-         InlineKeyboardButton("ℹ️ עזרה", callback_data="menu:help")],
-    ]
+    rows = []
     if is_admin:
         rows.append([InlineKeyboardButton("👑 פאנל ניהול", callback_data="menu:admin")])
-    return InlineKeyboardMarkup(rows)
+    return InlineKeyboardMarkup(rows) if rows else None
+
+
+def persistent_menu():
+    keyboard = [
+        [KeyboardButton("🔍 חיפוש"), KeyboardButton("📡 ההורדות שלי")],
+        [KeyboardButton("⚙️ הגדרות"), KeyboardButton("ℹ️ עזרה")]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
+
+
+def cancel_search_keyboard():
+    return InlineKeyboardMarkup([[InlineKeyboardButton("❌ ביטול חיפוש", callback_data="search:cancel")]])
 
 
 def back_home():

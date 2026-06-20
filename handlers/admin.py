@@ -14,10 +14,25 @@ from services import keyboards as kb, formatter as fmt
 # ───────────────────────── פאנל ראשי ─────────────────────────
 @require_role(config.ROLE_ADMIN)
 async def show_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["awaiting_broadcast"] = False
+    context.user_data["awaiting_search"] = False
+    search_task = context.user_data.get("search_task")
+    if search_task and not search_task.done():
+        try:
+            search_task.cancel()
+        except Exception:
+            pass
+    context.user_data["search_task"] = None
+
     q = update.callback_query
-    await q.answer()
+    if q:
+        await q.answer()
+        edit = q.edit_message_text
+    else:
+        edit = update.message.reply_text
+
     pending = await db.list_users(config.ROLE_PENDING)
-    await q.edit_message_text(
+    await edit(
         "👑 <b>פאנל ניהול</b>\n\nבחר פעולה:",
         parse_mode="HTML", reply_markup=kb.admin_menu(len(pending)))
 

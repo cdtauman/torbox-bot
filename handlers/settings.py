@@ -6,16 +6,35 @@ from telegram.ext import ContextTypes
 
 import config
 import database as db
+from handlers.auth import require_role
 from services import keyboards as kb, formatter as fmt
 
 
+@require_role(config.ROLE_USER)
 async def show_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["awaiting_broadcast"] = False
+    context.user_data["awaiting_search"] = False
+    search_task = context.user_data.get("search_task")
+    if search_task and not search_task.done():
+        try:
+            search_task.cancel()
+        except Exception:
+            pass
+    context.user_data["search_task"] = None
+
     q = update.callback_query
-    await q.answer()
-    user = await db.get_user(q.from_user.id)
+    if q:
+        await q.answer()
+        user_id = q.from_user.id
+        edit = q.edit_message_text
+    else:
+        user_id = update.effective_user.id
+        edit = update.message.reply_text
+
+    user = await db.get_user(user_id)
     s = user["settings"]
-    await q.edit_message_text(fmt.settings_view(s), parse_mode="HTML",
-                              reply_markup=kb.settings_menu(s))
+    await edit(fmt.settings_view(s), parse_mode="HTML",
+               reply_markup=kb.settings_menu(s))
 
 
 async def open_option(update: Update, context: ContextTypes.DEFAULT_TYPE):

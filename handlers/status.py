@@ -9,8 +9,19 @@ from handlers.auth import require_role
 from services import torbox_api, keyboards as kb, formatter as fmt
 
 
+@require_role(config.ROLE_USER)
 async def show_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """מציג את כל ההורדות הפעילות + כפתורי פעולה."""
+    context.user_data["awaiting_broadcast"] = False
+    context.user_data["awaiting_search"] = False
+    search_task = context.user_data.get("search_task")
+    if search_task and not search_task.done():
+        try:
+            search_task.cancel()
+        except Exception:
+            pass
+    context.user_data["search_task"] = None
+
     q = update.callback_query
     if q:
         await q.answer()
