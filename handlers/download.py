@@ -160,10 +160,14 @@ async def handle_debrid_convert(update: Update, context: ContextTypes.DEFAULT_TY
     from handlers.menu import clear_user_states
     clear_user_states(context)
     
+    logger.info(f"[DEBRID CONVERT] User {update.effective_user.id} requested conversion of link: {link[:60]}...")
     status = await update.message.reply_text("📥 ממיר את הקישור ב-TorBox...")
     try:
+        logger.debug("[DEBRID CONVERT] Calling torbox_api.create_webdl...")
         data = await torbox_api.create_webdl(link)
+        logger.debug(f"[DEBRID CONVERT] create_webdl returned successfully: {data}")
     except Exception as e:
+        logger.error(f"[DEBRID CONVERT] Error during conversion: {e}")
         await status.edit_text(f"⚠️ שגיאה: {e}")
         return
         

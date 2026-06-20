@@ -39,7 +39,8 @@ def _headers():
 
 async def _get(session, path, params=None):
     url = f"{BASE}{path}"
-    async with session.get(url, headers=_headers(), params=params) as resp:
+    timeout = aiohttp.ClientTimeout(total=15)
+    async with session.get(url, headers=_headers(), params=params, timeout=timeout) as resp:
         data = await resp.json(content_type=None)
         if not data.get("success", False):
             raise TorBoxError(data.get("detail") or data.get("error") or "שגיאה לא ידועה מ-TorBox")
@@ -48,7 +49,8 @@ async def _get(session, path, params=None):
 
 async def _post(session, path, json_body=None, data_body=None):
     url = f"{BASE}{path}"
-    async with session.post(url, headers=_headers(), json=json_body, data=data_body) as resp:
+    timeout = aiohttp.ClientTimeout(total=15)
+    async with session.post(url, headers=_headers(), json=json_body, data=data_body, timeout=timeout) as resp:
         data = await resp.json(content_type=None)
         if not data.get("success", False):
             raise TorBoxError(data.get("detail") or data.get("error") or "שגיאה לא ידועה מ-TorBox")
