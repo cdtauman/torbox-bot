@@ -30,7 +30,9 @@ async def download_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(msg)
 
     try:
-        if r.get("magnet") and not r.get("generated_magnet"):
+        if r.get("cached") and r.get("magnet"):
+            data = await torbox_api.add_magnet(r["magnet"])
+        elif r.get("magnet") and not r.get("generated_magnet"):
             data = await torbox_api.add_magnet(r["magnet"])
         elif r.get("source") == "prowlarr" and r.get("torrent_url"):
             filename, content = await prowlarr_api.fetch_torrent(r["torrent_url"])

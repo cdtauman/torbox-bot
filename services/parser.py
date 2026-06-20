@@ -26,6 +26,13 @@ def normalize(raw: dict) -> dict:
 
     thash = (raw.get("hash") or raw.get("info_hash") or "").lower()
     magnet = raw.get("magnet") or raw.get("magnet_link") or raw.get("magnetUrl") or ""
+    torrent_url = raw.get("torrent_url") or raw.get("download_url") or raw.get("downloadUrl") or ""
+
+    if magnet and not magnet.startswith("magnet:"):
+        if not torrent_url:
+            torrent_url = magnet
+        magnet = ""
+
     generated_magnet = False
     if not thash and magnet:
         m = re.search(r"(?i)urn:btih:([a-z0-9]{32,40})", magnet)
