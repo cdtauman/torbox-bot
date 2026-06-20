@@ -27,6 +27,14 @@ services:
       - "127.0.0.1:9696:9696"
     restart: unless-stopped
 
+  flaresolverr:
+    image: flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    environment:
+      - LOG_LEVEL=info
+      - TZ=Etc/UTC
+    restart: unless-stopped
+
 volumes:
   bot-data:
   prowlarr-config:
