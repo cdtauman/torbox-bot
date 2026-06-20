@@ -67,6 +67,21 @@ async def download_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML",
         reply_markup=kb.main_menu(await _is_admin(q.from_user.id)))
 
+    if torbox_id:
+        try:
+            import asyncio
+            await asyncio.sleep(1)
+            dl_data = await torbox_api.request_download_link(torbox_id)
+            link = dl_data if isinstance(dl_data, str) else (dl_data or {}).get("link") or str(dl_data)
+            if link:
+                await q.message.reply_text(
+                    f"🔗 <b>קישור הורדה ישיר מוכן עבורך:</b>\n\n{link}\n\n"
+                    "⚠️ הקישור זמני — הורד בקרוב.",
+                    parse_mode="HTML", disable_web_page_preview=True
+                )
+        except Exception:
+            pass
+
 
 # ───────────────────────── magnet ישיר ─────────────────────────
 @require_role(config.ROLE_USER)
@@ -85,6 +100,21 @@ async def handle_magnet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ נוסף בהצלחה!\n📋 {fmt.escape(name[:60])}\n\n"
         f"עקוב ב'ההורדות שלי' 📡",
         parse_mode="HTML")
+
+    if torbox_id:
+        try:
+            import asyncio
+            await asyncio.sleep(1)
+            dl_data = await torbox_api.request_download_link(torbox_id)
+            link = dl_data if isinstance(dl_data, str) else (dl_data or {}).get("link") or str(dl_data)
+            if link:
+                await update.message.reply_text(
+                    f"🔗 <b>קישור הורדה ישיר מוכן עבורך:</b>\n\n{link}\n\n"
+                    "⚠️ הקישור זמני — הורד בקרוב.",
+                    parse_mode="HTML", disable_web_page_preview=True
+                )
+        except Exception:
+            pass
 
 
 # ───────────────────────── קובץ .torrent ─────────────────────────
@@ -107,6 +137,21 @@ async def handle_torrent_file(update: Update, context: ContextTypes.DEFAULT_TYPE
         name = data.get("name", doc.file_name)
         await db.log_download(update.effective_user.id, name, 0, torbox_id, "")
         await status.edit_text(f"✅ נוסף בהצלחה!\n📋 {fmt.escape(name[:60])}", parse_mode="HTML")
+
+        if torbox_id:
+            try:
+                import asyncio
+                await asyncio.sleep(1)
+                dl_data = await torbox_api.request_download_link(torbox_id)
+                link = dl_data if isinstance(dl_data, str) else (dl_data or {}).get("link") or str(dl_data)
+                if link:
+                    await update.message.reply_text(
+                        f"🔗 <b>קישור הורדה ישיר מוכן עבורך:</b>\n\n{link}\n\n"
+                        "⚠️ הקישור זמני — הורד בקרוב.",
+                        parse_mode="HTML", disable_web_page_preview=True
+                    )
+            except Exception:
+                pass
     except torbox_api.TorBoxError as e:
         await status.edit_text(f"⚠️ {e}")
     except Exception as e:
