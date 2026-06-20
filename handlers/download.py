@@ -6,6 +6,8 @@ import os
 import tempfile
 import asyncio
 import uuid
+import logging
+logger = logging.getLogger(__name__)
 
 from telegram import Update
 from telegram.ext import ContextTypes
