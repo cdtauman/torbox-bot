@@ -57,7 +57,7 @@ def normalize(raw: dict) -> dict:
         "hash": thash,
         "magnet": magnet,
         "generated_magnet": generated_magnet,
-        "torrent_url": raw.get("torrent_url") or raw.get("download_url") or raw.get("downloadUrl") or "",
+        "torrent_url": torrent_url,
         "cached": cached,
         "owned": owned,
         "age": str(age),
