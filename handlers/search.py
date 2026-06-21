@@ -165,9 +165,12 @@ async def do_debrid_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not raw_results:
         await status_msg.edit_text(
-            f"😕 לא נמצאו תוצאות ב-RLSBB עבור <b>{fmt.escape(query)}</b> או שלא נמצאו קישורים נתמכים (Rapidgator).\n"
-            "נסה ניסוח אחר.",
-            parse_mode="HTML", reply_markup=kb.back_home())
+            f"😕 לא נמצאו תוצאות ב-RLSBB עבור <b>{fmt.escape(query)}</b>, "
+            "או שכל ה-Hosters שנמצאו כרגע כבויים ב-TorBox.\n\n"
+            "💡 <b>טיפ:</b> בדוק אילו Hosters פעילים כרגע:\nhttps://torbox.app/hosters\n\n"
+            "נסה גם ניסוח אחר.",
+            parse_mode="HTML", reply_markup=kb.back_home(),
+            disable_web_page_preview=True)
         return
 
     results = [parser.normalize(r) for r in raw_results]
