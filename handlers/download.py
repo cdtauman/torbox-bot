@@ -41,6 +41,7 @@ async def download_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if r.get("is_webdl"):
             webdl_link = magnet or torrent_url
             if webdl_link:
+                logger.info(f"[DOWNLOAD] Sending WebDL link to TorBox: {webdl_link[:80]}")
                 data = await torbox_api.create_webdl(webdl_link)
                 is_webdl_download = True
             else:
@@ -66,7 +67,10 @@ async def download_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(f"⚠️ {e}", reply_markup=kb.back_home())
         return
     except torbox_api.TorBoxError as e:
-        await q.edit_message_text(f"⚠️ {e}", reply_markup=kb.back_home())
+        err_msg = str(e)
+        if "cannot be downloaded" in err_msg.lower() or "not supported" in err_msg.lower():
+            err_msg += "\n\nייתכן שה-Hoster (למשל Rapidgator) כרגע לא זמין ב-TorBox.\nבדוק ב: https://torbox.app/hosters"
+        await q.edit_message_text(f"⚠️ {err_msg}", reply_markup=kb.back_home(), disable_web_page_preview=True)
         return
     except Exception as e:
         await q.edit_message_text(f"⚠️ שגיאה: {e}", reply_markup=kb.back_home())
@@ -74,9 +78,10 @@ async def download_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     is_webdl_download = r.get("is_webdl", False)
     if is_webdl_download:
-        torbox_id = (data or {}).get("data", {}).get("webdl_id") or (data or {}).get("webdl_id")
+        torbox_id = (data or {}).get("webdownload_id") or (data or {}).get("data", {}).get("webdownload_id")
     else:
         torbox_id = (data or {}).get("torrent_id") or (data or {}).get("id")
+    logger.info(f"[DOWNLOAD] TorBox returned id={torbox_id} | is_webdl={is_webdl_download} | raw_data={data}")
         
     await db.log_download(q.from_user.id, r["name"], r["size"], torbox_id, r.get("hash", ""))
 
@@ -168,13 +173,21 @@ async def handle_debrid_convert(update: Update, context: ContextTypes.DEFAULT_TY
         logger.debug("[DEBRID CONVERT] Calling torbox_api.create_webdl...")
         data = await torbox_api.create_webdl(link)
         logger.debug(f"[DEBRID CONVERT] create_webdl returned successfully: {data}")
+    except torbox_api.TorBoxError as e:
+        err_msg = str(e)
+        if "cannot be downloaded" in err_msg.lower() or "not supported" in err_msg.lower():
+            err_msg += "\n\nייתכן שה-Hoster כרגע לא זמין ב-TorBox.\nבדוק ב: https://torbox.app/hosters"
+        logger.error(f"[DEBRID CONVERT] TorBox error: {e}")
+        await status.edit_text(f"⚠️ {err_msg}", disable_web_page_preview=True)
+        return
     except Exception as e:
         logger.error(f"[DEBRID CONVERT] Error during conversion: {e}")
         await status.edit_text(f"⚠️ שגיאה: {e}")
         return
         
-    torbox_id = (data or {}).get("data", {}).get("webdl_id") or (data or {}).get("webdl_id")
-    name = (data or {}).get("data", {}).get("name") or "WebDL Download"
+    torbox_id = (data or {}).get("webdownload_id") or (data or {}).get("data", {}).get("webdownload_id")
+    name = (data or {}).get("name") or (data or {}).get("data", {}).get("name") or "WebDL Download"
+    logger.info(f"[DEBRID CONVERT] Success: torbox_id={torbox_id} | name={name} | raw_data={data}")
     await db.log_download(update.effective_user.id, name, 0, torbox_id, "")
     await status.edit_text(
         f"✅ נוסף בהצלחה להורדות ישירות!\n📋 {fmt.escape(name[:60])}\n\n"
