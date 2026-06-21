@@ -374,7 +374,7 @@ async def control_webdl(webdl_id, operation: str):
     """פעולות שליטה ב-WebDL: 'delete', 'pause', 'resume'."""
     async with aiohttp.ClientSession() as session:
         return await _post(session, "/webdl/controlwebdownload",
-                           json_body={"webdl_id": webdl_id, "operation": operation})
+                           json_body={"webdownload_id": webdl_id, "operation": operation})
 
 
 async def delete_webdl(webdl_id):
