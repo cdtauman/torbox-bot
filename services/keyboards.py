@@ -209,17 +209,39 @@ def settings_option_menu(field):
 def status_keyboard(items):
     """items — רשימת (torbox_id, name, finished)."""
     rows = []
+    has_finished = False
     for tid, name, finished in items:
-        short = (name[:25] + "…") if len(name) > 26 else name
+        # short name has to be a bit shorter to fit both buttons in a row nicely
+        short = (name[:20] + "…") if len(name) > 21 else name
         if finished:
-            rows.append([InlineKeyboardButton(f"🔗 קישור: {short}", callback_data=f"link:{tid}")])
+            has_finished = True
+            rows.append([
+                InlineKeyboardButton(f"🔗 קישור: {short}", callback_data=f"link:{tid}"),
+                InlineKeyboardButton("🗑️", callback_data=f"cancel:{tid}")
+            ])
         else:
             rows.append([InlineKeyboardButton(f"❌ בטל: {short}", callback_data=f"cancel:{tid}")])
-    rows.append([
+            
+    # שורת פעולות
+    action_row = [
         InlineKeyboardButton("🔄 רענן", callback_data="menu:status"),
         InlineKeyboardButton("🏠 ראשי", callback_data="menu:home"),
-    ])
+    ]
+    
+    if has_finished:
+        rows.append([InlineKeyboardButton("🗑️ מחיקת היסטוריה", callback_data="status:clear_confirm")])
+        
+    rows.append(action_row)
     return InlineKeyboardMarkup(rows)
+
+
+def confirm_clear_history_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🗑️ כן, מחק הכל", callback_data="status:clear_confirmed"),
+            InlineKeyboardButton("❌ ביטול", callback_data="menu:status")
+        ]
+    ])
 
 
 # ───────────────────────── אדמין ─────────────────────────

@@ -230,6 +230,10 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return await status.get_link(update, context)
         if data.startswith("cancel:"):
             return await status.cancel_download(update, context)
+        if data == "status:clear_confirm":
+            return await status.confirm_clear_history(update, context)
+        if data == "status:clear_confirmed":
+            return await status.clear_history(update, context)
 
         # ─── אדמין ───
         if data == "admin:users":
@@ -286,7 +290,16 @@ def main():
     if not config.TORBOX_API_KEY:
         raise SystemExit("❌ חסר TORBOX_API_KEY בקובץ .env")
 
-    app = Application.builder().token(config.BOT_TOKEN).post_init(post_init).build()
+    app = (
+        Application.builder()
+        .token(config.BOT_TOKEN)
+        .post_init(post_init)
+        .connect_timeout(30.0)
+        .read_timeout(30.0)
+        .write_timeout(30.0)
+        .pool_timeout(30.0)
+        .build()
+    )
 
     # Middleware — לוג כל update לפני כל handler
     app.add_handler(MessageHandler(filters.ALL, log_all_updates), group=-1)

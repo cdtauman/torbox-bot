@@ -112,3 +112,78 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer(f"שגיאה: {e}", show_alert=True)
         return
     await show_status(update, context)
+
+
+@require_role(config.ROLE_USER)
+async def confirm_clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """מבקש אישור לפני מחיקת כל היסטוריית ההורדות שהושלמו."""
+    q = update.callback_query
+    await q.answer()
+    
+    text = (
+        "⚠️ <b>האם אתה בטוח שברצונך למחוק את כל היסטוריית ההורדות שהושלמו?</b>\n\n"
+        "פעולה זו תסיר את כל ההורדות שהסתיימו מרשימת ההורדות שלך ב-TorBox. "
+        "פעולה זו אינה מוחקת הורדות פעילות שנמצאות בתהליך."
+    )
+    await q.edit_message_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=kb.confirm_clear_history_keyboard()
+    )
+
+
+@require_role(config.ROLE_USER)
+async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """מוחק את כל ההורדות שהושלמו (torrents + webdls)."""
+    q = update.callback_query
+    await q.answer("🗑️ מוחק היסטוריה...")
+    
+    try:
+        torrents = await torbox_api.my_list()
+        webdls = await torbox_api.webdl_list()
+    except Exception as e:
+        await q.answer(f"שגיאה בקבלת ההורדות: {e}", show_alert=True)
+        await show_status(update, context)
+        return
+
+    if isinstance(torrents, dict):
+        torrents = [torrents]
+    torrents = torrents or []
+
+    if isinstance(webdls, dict):
+        webdls = [webdls]
+    webdls = webdls or []
+    
+    import asyncio
+    delete_tasks = []
+    
+    # בדיקת טורנטים
+    for t in torrents:
+        tid = t.get("id") or t.get("torrent_id")
+        progress = t.get("progress", 0) or 0
+        pct = round(progress * 100) if progress <= 1 else round(progress)
+        finished = t.get("download_finished") or t.get("download_present") or pct >= 100
+        if finished and tid:
+            delete_tasks.append(torbox_api.delete_torrent(int(tid)))
+            
+    # בדיקת הורדות ישירות
+    for w in webdls:
+        wid = w.get("id") or w.get("webdl_id")
+        progress = w.get("progress", 0) or 0
+        pct = round(progress * 100) if progress <= 1 else round(progress)
+        finished = w.get("download_finished") or w.get("download_present") or w.get("download_state") == "completed" or pct >= 100
+        if finished and wid:
+            delete_tasks.append(torbox_api.delete_webdl(str(wid)))
+            
+    if not delete_tasks:
+        await q.answer("📭 לא נמצאו הורדות שהושלמו למחיקה", show_alert=True)
+        await show_status(update, context)
+        return
+        
+    try:
+        await asyncio.gather(*delete_tasks)
+        await q.answer("✅ היסטוריית ההורדות נמחקה בהצלחה!", show_alert=True)
+    except Exception as e:
+        await q.answer(f"חלק מהמחיקות נכשלו: {e}", show_alert=True)
+        
+    await show_status(update, context)
