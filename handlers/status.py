@@ -22,10 +22,18 @@ async def show_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
     context.user_data["search_task"] = None
 
+    import database as db
+
+    page = 0
     q = update.callback_query
     if q:
         await q.answer()
         edit = q.edit_message_text
+        if q.data and q.data.startswith("dlpage:"):
+            try:
+                page = int(q.data.split(":")[1])
+            except (ValueError, IndexError):
+                page = 0
     else:
         edit = update.message.reply_text
 
@@ -48,8 +56,9 @@ async def show_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     items = torrents + webdls
 
-    text = fmt.status_list(items)
-    btn_items = []
+    # בדיקה האם יש לפחות הורדה אחת שהושלמה בכל הרשימה
+    has_finished_anywhere = False
+    btn_items_all = []
     for it in items:
         is_webdl = it.get("is_webdl", False)
         tid = str(it.get("id") or it.get("torrent_id") or it.get("webdl_id"))
@@ -57,18 +66,41 @@ async def show_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tid = f"w_{tid}"
             
         name = it.get("name", "?")
-        # WebDL uses download_state or similar, but progress == 1 works
-        finished = it.get("download_finished") or it.get("download_present") or it.get("download_state") == "completed" or \
-                   (it.get("progress", 0) or 0) >= 1
-        btn_items.append((tid, name, finished))
+        progress = it.get("progress", 0) or 0
+        pct = round(progress * 100) if progress <= 1 else round(progress)
+        finished = it.get("download_finished") or it.get("download_present") or it.get("download_state") == "completed" or pct >= 100
+        if finished:
+            has_finished_anywhere = True
+        btn_items_all.append((tid, name, finished))
+
+    # לוגיקת דפדוף
+    user = await db.get_user(update.effective_user.id)
+    per_page = user["settings"].get("per_page", 5) if (user and "settings" in user) else 5
+    
+    total_items = len(items)
+    total_pages = (total_items + per_page - 1) // per_page if total_items > 0 else 1
+    
+    if page < 0:
+        page = 0
+    elif page >= total_pages:
+        page = total_pages - 1
+        
+    start_idx = page * per_page
+    end_idx = start_idx + per_page
+    
+    page_items = items[start_idx:end_idx]
+    page_btn_items = btn_items_all[start_idx:end_idx]
+
+    text = fmt.status_list(page_items, page=page, total_pages=total_pages, total_items=total_items, start_index=start_idx+1)
 
     await edit(text, parse_mode="HTML",
-               reply_markup=kb.status_keyboard(btn_items),
+               reply_markup=kb.status_keyboard(page_btn_items, page=page, total_pages=total_pages, has_finished_anywhere=has_finished_anywhere),
                disable_web_page_preview=True)
 
 
 async def get_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """link:<torbox_id> — מבקש קישור הורדה ישיר."""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     q = update.callback_query
     await q.answer("🔗 מכין קישור...")
     tid_raw = q.data.split(":")[1]
@@ -86,10 +118,16 @@ async def get_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
             link = data.get("link")
 
         if link:
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🗑️ מחק הורדה זו מהחשבון", callback_data=f"cancel:{tid_raw}")]
+            ])
             await q.message.reply_text(
                 f"🔗 <b>קישור הורדה:</b>\n\n{link}\n\n"
                 "⚠️ הקישור זמני — הורד בקרוב.",
-                parse_mode="HTML", disable_web_page_preview=True)
+                parse_mode="HTML",
+                reply_markup=keyboard,
+                disable_web_page_preview=True
+            )
         else:
             await q.answer("⚠️ לא נמצא קישור הורדה תקין עבור טורנט זה.", show_alert=True)
     except Exception as e:

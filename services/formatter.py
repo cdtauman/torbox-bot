@@ -79,11 +79,11 @@ def _progress_bar(pct, width=10):
     return "█" * filled + "░" * (width - filled)
 
 
-def status_list(items):
+def status_list(items, page=0, total_pages=1, total_items=0, start_index=1):
     if not items:
         return "📭 אין הורדות פעילות.\n\nחפש משהו כדי להתחיל!"
     lines = ["📡 <b>ההורדות שלך:</b>\n"]
-    for i, it in enumerate(items, 1):
+    for i, it in enumerate(items, start_index):
         name = escape(it.get("name", "?")[:50])
         progress = it.get("progress", 0) or 0
         pct = round(progress * 100) if progress <= 1 else round(progress)
@@ -102,6 +102,10 @@ def status_list(items):
             if eta:
                 lines.append(f"   📦 {size}  •  ⏱ {_human_eta(eta)}")
         lines.append("")
+
+    if total_items > len(items):
+        lines.append(f"━━━━━━━━━━\n📄 עמוד {page+1} מתוך {total_pages} (סה\"כ {total_items} הורדות)")
+
     return "\n".join(lines)
 
 

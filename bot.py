@@ -234,6 +234,8 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return await status.confirm_clear_history(update, context)
         if data == "status:clear_confirmed":
             return await status.clear_history(update, context)
+        if data.startswith("dlpage:"):
+            return await status.show_status(update, context)
 
         # ─── אדמין ───
         if data == "admin:users":

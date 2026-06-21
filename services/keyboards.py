@@ -206,29 +206,35 @@ def settings_option_menu(field):
 
 
 # ───────────────────────── סטטוס הורדות ─────────────────────────
-def status_keyboard(items):
-    """items — רשימת (torbox_id, name, finished)."""
+def status_keyboard(items, page=0, total_pages=1, has_finished_anywhere=False):
+    """items — רשימת (torbox_id, name, finished) של העמוד הנוכחי."""
     rows = []
-    has_finished = False
     for tid, name, finished in items:
-        # short name has to be a bit shorter to fit both buttons in a row nicely
-        short = (name[:20] + "…") if len(name) > 21 else name
+        # full width button allows longer name length
+        short = (name[:35] + "…") if len(name) > 36 else name
         if finished:
-            has_finished = True
-            rows.append([
-                InlineKeyboardButton(f"🔗 קישור: {short}", callback_data=f"link:{tid}"),
-                InlineKeyboardButton("🗑️", callback_data=f"cancel:{tid}")
-            ])
+            rows.append([InlineKeyboardButton(f"🔗 קישור: {short}", callback_data=f"link:{tid}")])
         else:
             rows.append([InlineKeyboardButton(f"❌ בטל: {short}", callback_data=f"cancel:{tid}")])
             
+    # ניווט עמודים
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton("◀️ הקודם", callback_data=f"dlpage:{page-1}"))
+        nav.append(InlineKeyboardButton(f"📄 {page+1}/{total_pages}", callback_data="noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton("הבא ▶️", callback_data=f"dlpage:{page+1}"))
+        if nav:
+            rows.append(nav)
+            
     # שורת פעולות
     action_row = [
-        InlineKeyboardButton("🔄 רענן", callback_data="menu:status"),
+        InlineKeyboardButton("🔄 רענן", callback_data=f"dlpage:{page}"),
         InlineKeyboardButton("🏠 ראשי", callback_data="menu:home"),
     ]
     
-    if has_finished:
+    if has_finished_anywhere:
         rows.append([InlineKeyboardButton("🗑️ מחיקת היסטוריה", callback_data="status:clear_confirm")])
         
     rows.append(action_row)
