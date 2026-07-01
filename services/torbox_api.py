@@ -374,8 +374,32 @@ async def control_webdl(webdl_id, operation: str):
     """פעולות שליטה ב-WebDL: 'delete', 'pause', 'resume'."""
     async with aiohttp.ClientSession() as session:
         return await _post(session, "/webdl/controlwebdownload",
-                           json_body={"webdownload_id": webdl_id, "operation": operation})
+                           json_body={"webdl_id": int(webdl_id), "operation": operation})
+
 
 
 async def delete_webdl(webdl_id):
     return await control_webdl(webdl_id, "delete")
+
+
+async def queued_list(qtype: str = "torrent"):
+    """קבלת הורדות שממתינות בתור (Queued)."""
+    params = {"type": qtype, "bypassCache": "true"}
+    async with aiohttp.ClientSession() as session:
+        return await _get(session, "/queued/getqueued", params=params)
+
+
+async def control_queued(queued_id, operation: str, qtype: str = "torrent"):
+    """
+    פעולות שליטה בתור (Queued): 'delete', 'start'.
+    """
+    async with aiohttp.ClientSession() as session:
+        return await _post(session, "/queued/controlqueued",
+                           json_body={"queued_id": int(queued_id), "operation": operation, "type": qtype})
+
+
+
+async def delete_queued(queued_id, qtype: str = "torrent"):
+    return await control_queued(queued_id, "delete", qtype)
+
+
