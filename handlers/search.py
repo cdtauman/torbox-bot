@@ -185,15 +185,34 @@ async def do_debrid_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _search_provider(query: str):
     provider = config.SEARCH_PROVIDER
+    
     if provider == "prowlarr":
-        return await prowlarr_api.search(query)
+        try:
+            return await prowlarr_api.search(query)
+        except Exception as exc:
+            logger.error("[SEARCH] Prowlarr failed or timed out: %s", exc)
+            # במקום לקרוס, נחזיר רשימה ריקה כדי שהמשתמש יראה "לא נמצאו תוצאות" בצורה נקייה
+            return []
+            
     if provider == "auto":
         try:
             return await prowlarr_api.search(query)
-        except prowlarr_api.ProwlarrError as exc:
-            logger.warning("[SEARCH] Prowlarr failed in auto mode, falling back to TorBox: %s", exc)
-            return await torbox_api.search(query)
-    return await torbox_api.search(query)
+        except Exception as exc:
+            # תופס כעת גם ProwlarrError וגם TimeoutError מכל סוג שהוא!
+            logger.warning("[SEARCH] Prowlarr failed or timed out, falling back to TorBox: %s", exc)
+            try:
+                return await torbox_api.search(query)
+            except Exception as tb_exc:
+                logger.error("[SEARCH] TorBox backup search also failed: %s", tb_exc)
+                return []
+                
+    # ברירת מחדל - חיפוש ישיר ב-TorBox
+    try:
+        return await torbox_api.search(query)
+    except Exception as exc:
+        logger.error("[SEARCH] TorBox search failed: %s", exc)
+        return []
+
 
 
 # ───────────────────────── רינדור תוצאות ─────────────────────────
