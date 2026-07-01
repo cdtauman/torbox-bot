@@ -44,6 +44,16 @@ async def show_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await edit(f"⚠️ שגיאה בטעינת ההורדות: {e}", reply_markup=kb.back_home())
         return
 
+    try:
+        queued_torrents = await torbox_api.queued_list("torrent")
+        queued_webdls = await torbox_api.queued_list("webdl")
+    except Exception as e:
+        # Import logging locally to prevent any import loop or missing logger reference
+        import logging
+        logging.getLogger(__name__).warning(f"Failed to fetch queued downloads for status: {e}")
+        queued_torrents = []
+        queued_webdls = []
+
     if isinstance(torrents, dict):
         torrents = [torrents]
     torrents = torrents or []
@@ -53,25 +63,48 @@ async def show_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     webdls = webdls or []
     for w in webdls:
         w["is_webdl"] = True
-        
-    items = torrents + webdls
+
+    if isinstance(queued_torrents, dict):
+        queued_torrents = [queued_torrents]
+    queued_torrents = queued_torrents or []
+    for qt in queued_torrents:
+        qt["is_queued"] = True
+        qt["progress"] = 0
+
+    if isinstance(queued_webdls, dict):
+        queued_webdls = [queued_webdls]
+    queued_webdls = queued_webdls or []
+    for qw in queued_webdls:
+        qw["is_queued"] = True
+        qw["is_webdl"] = True
+        qw["progress"] = 0
+
+    items = torrents + webdls + queued_torrents + queued_webdls
 
     # בדיקה האם יש לפחות הורדה אחת שהושלמה בכל הרשימה
     has_finished_anywhere = False
     btn_items_all = []
     for it in items:
         is_webdl = it.get("is_webdl", False)
+        is_queued = it.get("is_queued", False)
         tid = str(it.get("id") or it.get("torrent_id") or it.get("webdl_id"))
-        if is_webdl:
+        
+        if is_queued:
+            if is_webdl:
+                tid = f"qw_{tid}"
+            else:
+                tid = f"qt_{tid}"
+        elif is_webdl:
             tid = f"w_{tid}"
             
         name = it.get("name", "?")
         progress = it.get("progress", 0) or 0
         pct = round(progress * 100) if progress <= 1 else round(progress)
-        finished = it.get("download_finished") or it.get("download_present") or it.get("download_state") == "completed" or pct >= 100
+        finished = not is_queued and (it.get("download_finished") or it.get("download_present") or it.get("download_state") == "completed" or pct >= 100)
         if finished:
             has_finished_anywhere = True
         btn_items_all.append((tid, name, finished))
+
 
     # לוגיקת דפדוף
     user = await db.get_user(update.effective_user.id)
@@ -93,9 +126,16 @@ async def show_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = fmt.status_list(page_items, page=page, total_pages=total_pages, total_items=total_items, start_index=start_idx+1)
 
-    await edit(text, parse_mode="HTML",
-               reply_markup=kb.status_keyboard(page_btn_items, page=page, total_pages=total_pages, has_finished_anywhere=has_finished_anywhere),
-               disable_web_page_preview=True)
+    try:
+        await edit(text, parse_mode="HTML",
+                   reply_markup=kb.status_keyboard(page_btn_items, page=page, total_pages=total_pages, has_finished_anywhere=has_finished_anywhere),
+                   disable_web_page_preview=True)
+    except Exception as e:
+        if "message is not modified" in str(e).lower():
+            pass
+        else:
+            raise
+
 
 
 async def get_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -138,10 +178,26 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """cancel:<torbox_id> — מבטל/מוחק הורדה."""
     q = update.callback_query
     tid_raw = q.data.split(":")[1]
+    
+    is_queued_torrent = tid_raw.startswith("qt_")
+    is_queued_webdl = tid_raw.startswith("qw_")
     is_webdl = tid_raw.startswith("w_")
-    tid = tid_raw[2:] if is_webdl else tid_raw
+    
+    if is_queued_torrent:
+        tid = tid_raw[3:]
+    elif is_queued_webdl:
+        tid = tid_raw[3:]
+    elif is_webdl:
+        tid = tid_raw[2:]
+    else:
+        tid = tid_raw
+
     try:
-        if is_webdl:
+        if is_queued_torrent:
+            await torbox_api.delete_queued(tid, "torrent")
+        elif is_queued_webdl:
+            await torbox_api.delete_queued(tid, "webdl")
+        elif is_webdl:
             await torbox_api.delete_webdl(tid)
         else:
             await torbox_api.delete_torrent(int(tid))
@@ -150,6 +206,7 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer(f"שגיאה: {e}", show_alert=True)
         return
     await show_status(update, context)
+
 
 
 @require_role(config.ROLE_USER)

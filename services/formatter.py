@@ -85,13 +85,16 @@ def status_list(items, page=0, total_pages=1, total_items=0, start_index=1):
     lines = ["📡 <b>ההורדות שלך:</b>\n"]
     for i, it in enumerate(items, start_index):
         name = escape(it.get("name", "?")[:50])
+        is_queued = it.get("is_queued", False)
         progress = it.get("progress", 0) or 0
         pct = round(progress * 100) if progress <= 1 else round(progress)
         finished = it.get("download_finished") or it.get("download_present") or pct >= 100
         size = parser.human_size(it.get("size", 0))
 
         lines.append(f"<b>{i}. {name}</b>")
-        if finished:
+        if is_queued:
+            lines.append(f"   ⏳ ממתין בתור (ממתין ל-Slot פנוי בשרת)")
+        elif finished:
             lines.append(f"   ✅ הושלם  •  📦 {size}")
         else:
             speed = it.get("download_speed", 0) or 0
@@ -107,6 +110,7 @@ def status_list(items, page=0, total_pages=1, total_items=0, start_index=1):
         lines.append(f"━━━━━━━━━━\n📄 עמוד {page+1} מתוך {total_pages} (סה\"כ {total_items} הורדות)")
 
     return "\n".join(lines)
+
 
 
 def _human_eta(seconds):
