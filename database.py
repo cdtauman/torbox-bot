@@ -186,6 +186,25 @@ async def mark_download_as_notified(download_id: int):
         await db.commit()
 
 
+async def mark_download_by_torbox_id_as_notified(torbox_id, user_id: int):
+    """מסמן הורדה ככזו שנשלחה עבורה התראה לפי ה-torbox_id ומזהה המשתמש."""
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        await db.execute("UPDATE downloads SET notified=1 WHERE torbox_id=? AND user_id=?", (torbox_id, user_id))
+        await db.commit()
+
+
+async def is_download_logged(user_id: int, torbox_id) -> bool:
+    """בודק אם כבר קיימת רשומה פעילה (שטרם עודכנה לגביה התראה) עבור משתמש זה והורדה זו."""
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        async with db.execute(
+            "SELECT 1 FROM downloads WHERE user_id=? AND torbox_id=? AND notified=0",
+            (user_id, torbox_id)
+        ) as cur:
+            return bool(await cur.fetchone())
+
+
+
+
 async def get_stats():
     """סטטיסטיקות כלליות לפאנל אדמין."""
     day_ago = int(time.time()) - 86400

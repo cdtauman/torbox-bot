@@ -68,10 +68,15 @@ async def download_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     except torbox_api.TorBoxError as e:
         err_msg = str(e)
+        if "already queued" in err_msg.lower():
+            handled = await _handle_already_queued(q.from_user.id, r.get("name"), r.get("hash"), is_webdl=r.get("is_webdl", False), status_msg=q.message)
+            if handled:
+                return
         if "cannot be downloaded" in err_msg.lower() or "not supported" in err_msg.lower():
             err_msg += "\n\nייתכן שה-Hoster (למשל Rapidgator) כרגע לא זמין ב-TorBox.\nבדוק ב: https://torbox.app/hosters"
         await q.edit_message_text(f"⚠️ {err_msg}", reply_markup=kb.back_home(), disable_web_page_preview=True)
         return
+
     except Exception as e:
         await q.edit_message_text(f"⚠️ שגיאה: {e}", reply_markup=kb.back_home())
         return
@@ -96,7 +101,7 @@ async def download_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=kb.main_menu(await _is_admin(q.from_user.id)))
 
     if torbox_id:
-        await _try_send_direct_link(q.message, torbox_id, is_webdl=is_webdl_download)
+        await _try_send_direct_link(q.message, torbox_id, q.from_user.id, is_webdl=is_webdl_download)
 
 
 # ───────────────────────── magnet ישיר ─────────────────────────
@@ -107,18 +112,25 @@ async def handle_magnet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         data = await torbox_api.add_magnet(magnet)
     except Exception as e:
+        if "already queued" in str(e).lower():
+            thash, name = parse_magnet_info(magnet)
+            handled = await _handle_already_queued(update.effective_user.id, name, thash, is_webdl=False, status_msg=status)
+            if handled:
+                return
         await status.edit_text(f"⚠️ שגיאה: {e}")
         return
+    thash, parsed_name = parse_magnet_info(magnet)
     torbox_id = (data or {}).get("torrent_id") or (data or {}).get("id")
-    name = (data or {}).get("name", "magnet")
-    await db.log_download(update.effective_user.id, name, 0, torbox_id, "")
+    name = (data or {}).get("name") or parsed_name or "magnet"
+    item_hash = (data or {}).get("hash") or (data or {}).get("info_hash") or thash or ""
+    await db.log_download(update.effective_user.id, name, 0, torbox_id, item_hash)
     await status.edit_text(
         f"✅ נוסף בהצלחה!\n📋 {fmt.escape(name[:60])}\n\n"
         f"עקוב ב'ההורדות שלי' 📡",
         parse_mode="HTML")
 
     if torbox_id:
-        await _try_send_direct_link(update.message, torbox_id)
+        await _try_send_direct_link(update.message, torbox_id, update.effective_user.id)
 
 
 # ───────────────────────── קובץ .torrent ─────────────────────────
@@ -142,15 +154,26 @@ async def handle_torrent_file(update: Update, context: ContextTypes.DEFAULT_TYPE
             data = await torbox_api.add_torrent_file(safe_filename, f.read())
         torbox_id = (data or {}).get("torrent_id") or (data or {}).get("id")
         name = (data or {}).get("name") or safe_filename
-        await db.log_download(update.effective_user.id, name, 0, torbox_id, "")
+        item_hash = (data or {}).get("hash") or (data or {}).get("info_hash") or ""
+        await db.log_download(update.effective_user.id, name, 0, torbox_id, item_hash)
         await status.edit_text(f"✅ נוסף בהצלחה!\n📋 {fmt.escape(name[:60])}", parse_mode="HTML")
 
         if torbox_id:
-            await _try_send_direct_link(update.message, torbox_id)
+            await _try_send_direct_link(update.message, torbox_id, update.effective_user.id)
 
     except torbox_api.TorBoxError as e:
+        if "already queued" in str(e).lower():
+            name_fallback = safe_filename[:-8] if safe_filename.lower().endswith(".torrent") else safe_filename
+            handled = await _handle_already_queued(update.effective_user.id, name_fallback, "", is_webdl=False, status_msg=status)
+            if handled:
+                return
         await status.edit_text(f"⚠️ {e}")
     except Exception as e:
+        if "already queued" in str(e).lower():
+            name_fallback = safe_filename[:-8] if safe_filename.lower().endswith(".torrent") else safe_filename
+            handled = await _handle_already_queued(update.effective_user.id, name_fallback, "", is_webdl=False, status_msg=status)
+            if handled:
+                return
         await status.edit_text(f"⚠️ שגיאה בעיבוד הקובץ: {e}")
     finally:
         if path and os.path.exists(path):
@@ -175,12 +198,27 @@ async def handle_debrid_convert(update: Update, context: ContextTypes.DEFAULT_TY
         logger.debug(f"[DEBRID CONVERT] create_webdl returned successfully: {data}")
     except torbox_api.TorBoxError as e:
         err_msg = str(e)
+        if "already queued" in err_msg.lower():
+            import urllib.parse
+            path_part = urllib.parse.urlparse(link).path
+            name_fallback = os.path.basename(path_part)
+            handled = await _handle_already_queued(update.effective_user.id, name_fallback, "", is_webdl=True, status_msg=status)
+            if handled:
+                return
         if "cannot be downloaded" in err_msg.lower() or "not supported" in err_msg.lower():
             err_msg += "\n\nייתכן שה-Hoster כרגע לא זמין ב-TorBox.\nבדוק ב: https://torbox.app/hosters"
         logger.error(f"[DEBRID CONVERT] TorBox error: {e}")
         await status.edit_text(f"⚠️ {err_msg}", disable_web_page_preview=True)
         return
     except Exception as e:
+        err_msg = str(e)
+        if "already queued" in err_msg.lower():
+            import urllib.parse
+            path_part = urllib.parse.urlparse(link).path
+            name_fallback = os.path.basename(path_part)
+            handled = await _handle_already_queued(update.effective_user.id, name_fallback, "", is_webdl=True, status_msg=status)
+            if handled:
+                return
         logger.error(f"[DEBRID CONVERT] Error during conversion: {e}")
         await status.edit_text(f"⚠️ שגיאה: {e}")
         return
@@ -195,9 +233,9 @@ async def handle_debrid_convert(update: Update, context: ContextTypes.DEFAULT_TY
         parse_mode="HTML")
 
     if torbox_id:
-        await _try_send_direct_link(update.message, torbox_id, is_webdl=True)
+        await _try_send_direct_link(update.message, torbox_id, update.effective_user.id, is_webdl=True)
 
-async def _try_send_direct_link(message, torbox_id, is_webdl=False):
+async def _try_send_direct_link(message, torbox_id, user_id, is_webdl=False):
     # Try up to 3 times to get the link if the torrent is cached, since TorBox API might take a few seconds to process
     for attempt in range(3):
         try:
@@ -218,6 +256,7 @@ async def _try_send_direct_link(message, torbox_id, is_webdl=False):
                     "⚠️ הקישור זמני — הורד בקרוב.",
                     parse_mode="HTML", disable_web_page_preview=True
                 )
+                await db.mark_download_by_torbox_id_as_notified(torbox_id, user_id)
                 return
         except Exception:
             pass
@@ -226,3 +265,125 @@ async def _try_send_direct_link(message, torbox_id, is_webdl=False):
 async def _is_admin(user_id):
     user = await db.get_user(user_id)
     return user and user["role"] >= config.ROLE_ADMIN
+
+
+def parse_magnet_info(magnet: str):
+    import re
+    from urllib.parse import unquote
+    thash = ""
+    name = ""
+    m_hash = re.search(r"(?i)urn:btih:([a-f0-9]{32,40})", magnet)
+    if m_hash:
+        thash = m_hash.group(1).lower()
+    else:
+        m_hash_b32 = re.search(r"(?i)urn:btih:([a-z2-7]{32})", magnet)
+        if m_hash_b32:
+            thash = m_hash_b32.group(1).lower()
+    m_name = re.search(r"(?i)dn=([^&]+)", magnet)
+    if m_name:
+        name = unquote(m_name.group(1))
+    return thash, name
+
+
+async def _handle_already_queued(user_id, name: str, thash: str, is_webdl: bool = False, status_msg = None, reply_to_message = None):
+    logger.info(f"[ALREADY_QUEUED] Handling already queued for user={user_id} | name={name!r} | hash={thash!r} | is_webdl={is_webdl}")
+    try:
+        if is_webdl:
+            active_items = await torbox_api.webdl_list()
+        else:
+            active_items = await torbox_api.my_list()
+    except Exception as e:
+        logger.error(f"[ALREADY_QUEUED] Failed to fetch active list: {e}", exc_info=True)
+        active_items = []
+
+    if isinstance(active_items, dict):
+        active_items = [active_items]
+    active_items = active_items or []
+
+    try:
+        qtype = "webdl" if is_webdl else "torrent"
+        queued_items = await torbox_api.queued_list(qtype)
+    except Exception as e:
+        logger.error(f"[ALREADY_QUEUED] Failed to fetch queued list: {e}", exc_info=True)
+        queued_items = []
+
+    if isinstance(queued_items, dict):
+        queued_items = [queued_items]
+    queued_items = queued_items or []
+
+    items = active_items + queued_items
+    logger.info(f"[ALREADY_QUEUED] TorBox returned {len(active_items)} active and {len(queued_items)} queued items (total: {len(items)})")
+
+
+    found_item = None
+    if thash:
+        clean_hash = thash.lower().strip()
+        logger.info(f"[ALREADY_QUEUED] Attempting match by hash: {clean_hash}")
+        for item in items:
+            item_hash = (item.get("hash") or item.get("info_hash") or "").lower().strip()
+            logger.debug(f"  Comparing with item hash: {item_hash!r} (name: {item.get('name')!r})")
+            if item_hash == clean_hash:
+                logger.info(f"[ALREADY_QUEUED] Match found by hash! name={item.get('name')!r}")
+                found_item = item
+                break
+
+    if not found_item and name:
+        clean_name = name.lower().strip()
+        logger.info(f"[ALREADY_QUEUED] Attempting match by name: {clean_name}")
+        for item in items:
+            item_name = (item.get("name") or "").lower().strip()
+            logger.debug(f"  Comparing with item name: {item_name!r}")
+            if clean_name in item_name or item_name in clean_name:
+                logger.info(f"[ALREADY_QUEUED] Match found by name! name={item.get('name')!r}")
+                found_item = item
+                break
+
+    if found_item:
+        tid = found_item.get("id") or found_item.get("torrent_id") or found_item.get("webdl_id")
+
+            
+        progress = found_item.get("progress", 0) or 0
+        pct = round(progress * 100) if progress <= 1 else round(progress)
+        finished = found_item.get("download_finished") or found_item.get("download_present") or found_item.get("download_state") == "completed" or pct >= 100
+
+        # רישום ההורדה עבור משתמש זה במסד הנתונים כדי שיקבל התראה כשתסתיים
+        if not await db.is_download_logged(user_id, tid):
+            await db.log_download(user_id, found_item.get("name") or name or "Download", found_item.get("size", 0), tid, thash)
+
+        if finished:
+            success_text = (
+                f"✅ <b>ההורדה כבר קיימת והושלמה!</b>\n\n"
+                f"📋 {fmt.escape((found_item.get('name') or name)[:60])}\n"
+                f"📦 {parser.human_size(found_item.get('size', 0))}\n"
+            )
+            if status_msg:
+                try:
+                    await status_msg.edit_text(success_text, parse_mode="HTML")
+                except Exception:
+                    pass
+            elif reply_to_message:
+                await reply_to_message.reply_text(success_text, parse_mode="HTML")
+                
+            msg_for_link = status_msg or reply_to_message
+            if msg_for_link:
+                await _try_send_direct_link(msg_for_link, tid, user_id, is_webdl=is_webdl)
+            return True
+        else:
+            progress_text = (
+                f"⏳ <b>ההורדה הזו כבר נמצאת בתור ההורדות שלך ומורידה כעת!</b>\n\n"
+                f"📋 {fmt.escape(found_item.get('name') or name)}\n"
+                f"📊 התקדמות: {pct}%\n\n"
+                f"תוכל לעקוב אחריה בתפריט 'ההורדות שלי' 📡\n"
+                f"🔔 תקבל התראה אוטומטית עם קישור ברגע שהיא תסתיים!"
+            )
+            if status_msg:
+                try:
+                    await status_msg.edit_text(progress_text, parse_mode="HTML")
+                except Exception:
+                    pass
+            elif reply_to_message:
+                await reply_to_message.reply_text(progress_text, parse_mode="HTML")
+            return True
+    return False
+
+
