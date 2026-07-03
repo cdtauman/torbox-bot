@@ -3,6 +3,7 @@ database.py — שכבת בסיס הנתונים (SQLite אסינכרוני)
 מנהל: משתמשים, הגדרות אישיות, היסטוריית חיפוש והורדות.
 """
 import json
+import secrets
 import time
 import aiosqlite
 
@@ -43,6 +44,20 @@ async def init_db():
                 query       TEXT,
                 results     INTEGER,
                 created_at  INTEGER
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS public_links (
+                token       TEXT PRIMARY KEY,
+                user_id     INTEGER,
+                item_type   TEXT NOT NULL,
+                torbox_id   TEXT NOT NULL,
+                file_id     TEXT DEFAULT '',
+                name        TEXT,
+                created_at  INTEGER,
+                last_accessed INTEGER,
+                access_count INTEGER DEFAULT 0,
+                active      INTEGER DEFAULT 1
             )
         """)
         await db.commit()
@@ -203,6 +218,89 @@ async def is_download_logged(user_id: int, torbox_id) -> bool:
             return bool(await cur.fetchone())
 
 
+
+
+async def get_or_create_public_link(
+    user_id: int,
+    item_type: str,
+    torbox_id,
+    name: str = "",
+    file_id=None,
+) -> str:
+    """יוצר token ציבורי קבוע להורדה, או מחזיר token קיים לאותו פריט."""
+    item_type = "webdl" if item_type == "webdl" else "torrent"
+    torbox_id = str(torbox_id)
+    file_id = "" if file_id is None else str(file_id)
+    now = int(time.time())
+
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        async with db.execute(
+            """
+            SELECT token FROM public_links
+            WHERE user_id=? AND item_type=? AND torbox_id=? AND file_id=? AND active=1
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (user_id, item_type, torbox_id, file_id),
+        ) as cur:
+            row = await cur.fetchone()
+            if row:
+                return row[0]
+
+        for _ in range(5):
+            token = secrets.token_urlsafe(18)
+            try:
+                await db.execute(
+                    """
+                    INSERT INTO public_links
+                    (token, user_id, item_type, torbox_id, file_id, name, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (token, user_id, item_type, torbox_id, file_id, name or "", now),
+                )
+                await db.commit()
+                return token
+            except aiosqlite.IntegrityError:
+                continue
+
+    raise RuntimeError("Failed to create a unique public download token")
+
+
+async def get_public_link(token: str):
+    """מחזיר רשומת קישור ציבורי לפי token."""
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM public_links WHERE token=? AND active=1",
+            (token,),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def record_public_link_access(token: str):
+    """מעדכן סטטיסטיקת שימוש לקישור ציבורי."""
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        await db.execute(
+            """
+            UPDATE public_links
+            SET last_accessed=?, access_count=COALESCE(access_count, 0) + 1
+            WHERE token=?
+            """,
+            (int(time.time()), token),
+        )
+        await db.commit()
+
+
+async def disable_public_links_for_item(item_type: str, torbox_id):
+    """מבטל קישורים ציבוריים לפריט שנמחק ידנית."""
+    item_type = "webdl" if item_type == "webdl" else "torrent"
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        await db.execute(
+            "UPDATE public_links SET active=0 WHERE item_type=? AND torbox_id=?",
+            (item_type, str(torbox_id)),
+        )
+        await db.commit()
 
 
 async def get_stats():

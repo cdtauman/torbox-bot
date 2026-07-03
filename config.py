@@ -7,6 +7,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
 # ───────────────────────── טוקנים ─────────────────────────
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 TORBOX_API_KEY = os.getenv("TORBOX_API_KEY", "")
@@ -38,6 +46,24 @@ PROWLARR_LIMIT = int(os.getenv("PROWLARR_LIMIT", str(SEARCH_LIMIT)))
 
 # ───────────────────────── בסיס נתונים ─────────────────────────
 DB_PATH = os.getenv("DB_PATH", "torbox_bot.db")
+
+# ───────────────────────── קישורי הורדה קבועים ─────────────────────────
+# PUBLIC_BASE_URL should point to this bot's public HTTP endpoint, for example:
+# https://downloads.example.com
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+PUBLIC_LINKS_ENABLED = _env_bool("PUBLIC_LINKS_ENABLED", bool(PUBLIC_BASE_URL)) and bool(PUBLIC_BASE_URL)
+PUBLIC_LINK_HOST = os.getenv("PUBLIC_LINK_HOST", "0.0.0.0")
+PUBLIC_LINK_PORT = int(os.getenv("PUBLIC_LINK_PORT", "8080"))
+PUBLIC_LINK_PATH_PREFIX = os.getenv("PUBLIC_LINK_PATH_PREFIX", "d").strip("/")
+PUBLIC_LINK_RATE_LIMIT_PER_MINUTE = int(os.getenv("PUBLIC_LINK_RATE_LIMIT_PER_MINUTE", "30"))
+
+# When permanent public links are enabled, completed downloads must stay in
+# TorBox/AirLock. Set AUTO_DELETE_COMPLETED_AFTER_MINUTES to a positive value if
+# you prefer automatic cleanup over long-lived links.
+AUTO_DELETE_COMPLETED_AFTER_MINUTES = int(
+    os.getenv("AUTO_DELETE_COMPLETED_AFTER_MINUTES", "0" if PUBLIC_LINKS_ENABLED else "120")
+)
+QUEUE_ROTATE_ACTIVE_AFTER_MINUTES = int(os.getenv("QUEUE_ROTATE_ACTIVE_AFTER_MINUTES", "30"))
 
 # ───────────────────────── רמות הרשאה ─────────────────────────
 ROLE_BANNED = 0   # חסום — אין גישה

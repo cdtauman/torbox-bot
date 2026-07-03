@@ -5,8 +5,9 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 import config
+import database as db
 from handlers.auth import require_role
-from services import torbox_api, keyboards as kb, formatter as fmt
+from services import torbox_api, keyboards as kb, formatter as fmt, public_links
 
 
 @require_role(config.ROLE_USER)
@@ -158,12 +159,32 @@ async def get_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
             link = data.get("link")
 
         if link:
+            public_url = None
+            try:
+                public_url = await public_links.get_or_create_download_url(
+                    user_id=q.from_user.id,
+                    item_type="webdl" if is_webdl else "torrent",
+                    torbox_id=tid,
+                )
+            except Exception:
+                public_url = None
+
+            if public_url:
+                text = (
+                    f"🔗 <b>קישור הורדה קבוע:</b>\n\n{public_url}\n\n"
+                    "הקישור יוצר קישור TorBox חדש בכל לחיצה, בלי לחשוף את ה-API key."
+                )
+            else:
+                text = (
+                    f"🔗 <b>קישור הורדה:</b>\n\n{link}\n\n"
+                    "⚠️ הקישור זמני — הורד בקרוב."
+                )
+
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🗑️ מחק הורדה זו מהחשבון", callback_data=f"cancel:{tid_raw}")]
             ])
             await q.message.reply_text(
-                f"🔗 <b>קישור הורדה:</b>\n\n{link}\n\n"
-                "⚠️ הקישור זמני — הורד בקרוב.",
+                text,
                 parse_mode="HTML",
                 reply_markup=keyboard,
                 disable_web_page_preview=True
@@ -199,8 +220,10 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await torbox_api.delete_queued(tid, "webdl")
         elif is_webdl:
             await torbox_api.delete_webdl(tid)
+            await db.disable_public_links_for_item("webdl", tid)
         else:
             await torbox_api.delete_torrent(int(tid))
+            await db.disable_public_links_for_item("torrent", tid)
         await q.answer("❌ ההורדה בוטלה")
     except Exception as e:
         await q.answer(f"שגיאה: {e}", show_alert=True)
@@ -251,6 +274,7 @@ async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     import asyncio
     delete_tasks = []
+    deleted_items = []
     
     # בדיקת טורנטים
     for t in torrents:
@@ -260,6 +284,7 @@ async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
         finished = t.get("download_finished") or t.get("download_present") or pct >= 100
         if finished and tid:
             delete_tasks.append(torbox_api.delete_torrent(int(tid)))
+            deleted_items.append(("torrent", tid))
             
     # בדיקת הורדות ישירות
     for w in webdls:
@@ -269,6 +294,7 @@ async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
         finished = w.get("download_finished") or w.get("download_present") or w.get("download_state") == "completed" or pct >= 100
         if finished and wid:
             delete_tasks.append(torbox_api.delete_webdl(str(wid)))
+            deleted_items.append(("webdl", wid))
             
     if not delete_tasks:
         await q.answer("📭 לא נמצאו הורדות שהושלמו למחיקה", show_alert=True)
@@ -277,6 +303,8 @@ async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     try:
         await asyncio.gather(*delete_tasks)
+        for item_type, item_id in deleted_items:
+            await db.disable_public_links_for_item(item_type, item_id)
         await q.answer("✅ היסטוריית ההורדות נמחקה בהצלחה!", show_alert=True)
     except Exception as e:
         await q.answer(f"חלק מהמחיקות נכשלו: {e}", show_alert=True)

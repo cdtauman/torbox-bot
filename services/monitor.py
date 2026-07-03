@@ -6,8 +6,9 @@ import asyncio
 import logging
 import time
 import datetime
+import config
 import database as db
-from services import torbox_api
+from services import public_links, torbox_api
 
 logger = logging.getLogger(__name__)
 
@@ -131,11 +132,29 @@ async def check_downloads_status(application):
             if notify_enabled:
                 try:
                     if link:
+                        public_url = None
+                        try:
+                            public_url = await public_links.get_or_create_download_url(
+                                user_id=user_id,
+                                item_type="torrent",
+                                torbox_id=tid,
+                                name=dl.get("name", ""),
+                            )
+                        except Exception as e:
+                            logger.warning("[MONITOR] Failed to create public link for %s: %s", tid, e)
+
+                        download_url = public_url or link
+                        link_label = "קישור הורדה קבוע" if public_url else "קישור הורדה ישיר"
+                        link_note = (
+                            "הקישור יוצר קישור TorBox חדש בכל לחיצה, בלי לחשוף את ה-API key."
+                            if public_url
+                            else "⚠️ הקישור זמני — הורד בקרוב."
+                        )
                         text = (
                             f"🎉 <b>ההורדה שלך מוכנה!</b>\n\n"
                             f"📋 {dl['name'][:100]}\n\n"
-                            f"🔗 <b>קישור הורדה ישיר:</b>\n{link}\n\n"
-                            f"⚠️ הקישור זמני — הורד בקרוב."
+                            f"🔗 <b>{link_label}:</b>\n{download_url}\n\n"
+                            f"{link_note}"
                         )
                         await application.bot.send_message(
                             chat_id=user_id,
@@ -178,8 +197,8 @@ async def check_downloads_status(application):
 async def check_and_clean_old_torrents():
     """
     מנגנון ניקוי אוטומטי המבוסס על שתי רמות:
-    1. מחיקת הורדות שהושלמו (Finished) ושגילן עולה על שעתיים (120 דקות).
-    2. מחיקת ההורדה הפעילה הכי ישנה (גיל >= 30 דק') במידה ויש הורדות בתור הממתינות ל-Slot פנוי.
+    1. מחיקת הורדות שהושלמו רק אם AUTO_DELETE_COMPLETED_AFTER_MINUTES חיובי.
+    2. מחיקת ההורדה הפעילה הכי ישנה במידה ויש הורדות בתור הממתינות ל-Slot פנוי.
     """
     try:
         queued_torrents = await torbox_api.queued_list("torrent")
@@ -251,19 +270,27 @@ async def check_and_clean_old_torrents():
     if not all_active:
         return
 
-    # ─── שלב 1: מחיקת קבצים שהושלמו ועבר עליהם שעתיים (120 דקות) ───
+    # ─── שלב 1: מחיקת קבצים שהושלמו לפי מדיניות retention ───
     deleted_any = False
     remaining_active = []
+    completed_ttl = config.AUTO_DELETE_COMPLETED_AFTER_MINUTES
     for item in all_active:
         age_minutes = (now - item["created_at"]).total_seconds() / 60.0
-        if item["finished"] and age_minutes >= 120:
-            logger.info("[CLEANUP] Retention policy: Deleting finished download %r (age %.1f min >= 120 min) to keep account clean...", 
-                        item["name"], age_minutes)
+        if completed_ttl > 0 and item["finished"] and age_minutes >= completed_ttl:
+            logger.info(
+                "[CLEANUP] Retention policy: Deleting finished download %r "
+                "(age %.1f min >= %s min)...",
+                item["name"],
+                age_minutes,
+                completed_ttl,
+            )
             try:
                 if item["is_webdl"]:
                     await torbox_api.delete_webdl(item["id"])
+                    await db.disable_public_links_for_item("webdl", item["id"])
                 else:
                     await torbox_api.delete_torrent(int(item["id"]))
+                    await db.disable_public_links_for_item("torrent", item["id"])
                 deleted_any = True
             except Exception as e:
                 logger.error("[CLEANUP] Failed to delete finished item %s: %s", item["id"], e)
@@ -278,29 +305,49 @@ async def check_and_clean_old_torrents():
             logger.info("[CLEANUP] No remaining active downloads found to rotate.")
             return
 
+        rotation_candidates = remaining_active
+        if completed_ttl <= 0:
+            rotation_candidates = [item for item in remaining_active if not item["finished"]]
+            if not rotation_candidates:
+                logger.info("[CLEANUP] Only finished downloads remain; keeping them for permanent links.")
+                return
+
         # מיון לפי תאריך יצירה עולה (הכי ישן ראשון)
-        remaining_active.sort(key=lambda x: x["created_at"])
-        oldest = remaining_active[0]
+        rotation_candidates.sort(key=lambda x: x["created_at"])
+        oldest = rotation_candidates[0]
 
         age_minutes = (now - oldest["created_at"]).total_seconds() / 60.0
         logger.info("[CLEANUP] Oldest active download is %r (ID: %s, created: %s), age is %.1f minutes", 
                     oldest["name"], oldest["id"], oldest["created_at"], age_minutes)
 
-        if age_minutes >= 30:
-            logger.info("[CLEANUP] Queue Rotator: Deleting oldest active download %r (age %.1f min >= 30 min) to free up slot for queued items...", 
-                        oldest["name"], age_minutes)
+        rotate_after = config.QUEUE_ROTATE_ACTIVE_AFTER_MINUTES
+        if rotate_after > 0 and age_minutes >= rotate_after:
+            logger.info(
+                "[CLEANUP] Queue Rotator: Deleting oldest active download %r "
+                "(age %.1f min >= %s min) to free up slot for queued items...",
+                oldest["name"],
+                age_minutes,
+                rotate_after,
+            )
             try:
                 if oldest["is_webdl"]:
                     await torbox_api.delete_webdl(oldest["id"])
+                    await db.disable_public_links_for_item("webdl", oldest["id"])
                 else:
                     await torbox_api.delete_torrent(int(oldest["id"]))
+                    await db.disable_public_links_for_item("torrent", oldest["id"])
                 logger.info("[CLEANUP] Successfully deleted %r", oldest["name"])
                 deleted_any = True
+                remaining_active = [item for item in remaining_active if item is not oldest]
             except Exception as e:
                 logger.error("[CLEANUP] Failed to rotate oldest item %s: %s", oldest["id"], e)
         else:
-            logger.info("[CLEANUP] Oldest active download %r is only %.1f minutes old (< 30 min). Waiting...", 
-                        oldest["name"], age_minutes)
+            logger.info(
+                "[CLEANUP] Oldest active download %r is only %.1f minutes old (< %s min). Waiting...",
+                oldest["name"],
+                age_minutes,
+                rotate_after,
+            )
 
     # ─── שלב 3: הפעלה יזומה של ההורדה הבאה בתור במידה והתפנה slot ───
     if total_queued > 0 and (deleted_any or len(remaining_active) < 3):
@@ -321,6 +368,3 @@ async def check_and_clean_old_torrents():
                 logger.info("[CLEANUP] Successfully started queued item %r", next_queued.get("name"))
             except Exception as e:
                 logger.warning("[CLEANUP] Failed to start queued item %s: %s", qid, e)
-
-
-

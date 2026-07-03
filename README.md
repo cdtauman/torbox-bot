@@ -26,6 +26,7 @@
 - הכל בכפתורים — כמעט ללא הקלדה
 - מעקב הורדות בזמן אמת עם פס התקדמות
 - קישורי הורדה ישירים בלחיצה
+- קישורי הורדה קבועים משלך שמרעננים קישור TorBox בכל לחיצה
 - הגדרות אישיות לכל משתמש
 
 ---
@@ -56,6 +57,7 @@ nano .env
 - `OWNER_ID` — ה-ID שלך מ-[@userinfobot](https://t.me/userinfobot)
 - `SEARCH_PROVIDER=prowlarr` — מומלץ להרצה על Hetzner
 - `PROWLARR_API_KEY` — מתוך Prowlarr: `Settings > General`
+- `PUBLIC_BASE_URL` — אופציונלי, דומיין ציבורי לקישורי הורדה קבועים, למשל `https://downloads.example.com`
 
 ### 4. הרצה
 ```bash
@@ -99,8 +101,29 @@ docker compose up -d --build
 
 בדיקת בטיחות:
 - פורט `9696` קשור רק ל-`127.0.0.1`.
+- פורט `8080` של קישורי ההורדה קשור גם הוא ל-`127.0.0.1`; חבר אליו reverse proxy עם HTTPS.
 - הבוט מדבר עם Prowlarr דרך Docker network פנימי: `http://prowlarr:9696`.
 - אין download client על השרת, ולכן אין תעבורת P2P מהשרת.
+
+### קישורי הורדה קבועים
+
+כדי שהבוט ישלח קישור קבוע במקום קישור TorBox זמני, הגדר:
+
+```env
+PUBLIC_BASE_URL=https://downloads.example.com
+PUBLIC_LINK_PORT=8080
+AUTO_DELETE_COMPLETED_AFTER_MINUTES=0
+```
+
+הקישור שהמשתמש מקבל יהיה בסגנון:
+
+```text
+https://downloads.example.com/d/<token>
+```
+
+בכל לחיצה הבוט יוצר מול TorBox קישור הורדה טרי ומחזיר `302 Redirect`, כך שהקובץ עצמו עדיין יורד מ-TorBox/CDN ולא מהשרת שלך.
+
+חשוב: הקישור ימשיך לעבוד רק כל עוד הפריט עדיין קיים ב-TorBox או AirLock והחשבון שלך פעיל. אם אתה רוצה קישורים ארוכי טווח באמת, אל תמחק הורדות שהושלמו ושקול להעביר פריטים חשובים ל-AirLock.
 
 ---
 
@@ -154,6 +177,8 @@ torbox-bot/
 │
 ├── services/
 │   ├── torbox_api.py       # עטיפת TorBox API
+│   ├── link_server.py      # שרת redirect לקישורי הורדה קבועים
+│   ├── public_links.py     # יצירה ובנייה של URL ציבורי לפי token
 │   ├── prowlarr_api.py     # חיפוש דרך Prowlarr
 │   ├── parser.py           # נרמול, סינון, מיון, זיהוי איכות
 │   ├── keyboards.py        # כל הכפתורים

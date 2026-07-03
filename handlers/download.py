@@ -15,7 +15,7 @@ from telegram.ext import ContextTypes
 import config
 import database as db
 from handlers.auth import require_role
-from services import torbox_api, prowlarr_api, keyboards as kb, formatter as fmt, parser
+from services import torbox_api, prowlarr_api, keyboards as kb, formatter as fmt, parser, public_links
 
 
 # ───────────────────────── הורדה מתוצאה ─────────────────────────
@@ -251,9 +251,29 @@ async def _try_send_direct_link(message, torbox_id, user_id, is_webdl=False):
                 link = dl_data.get("link")
 
             if link:
+                public_url = None
+                try:
+                    public_url = await public_links.get_or_create_download_url(
+                        user_id=user_id,
+                        item_type="webdl" if is_webdl else "torrent",
+                        torbox_id=torbox_id,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to create public download link for %s: %s", torbox_id, e)
+
+                if public_url:
+                    text = (
+                        f"🔗 <b>קישור הורדה קבוע מוכן עבורך:</b>\n\n{public_url}\n\n"
+                        "הקישור יוצר קישור TorBox חדש בכל לחיצה, בלי לחשוף את ה-API key."
+                    )
+                else:
+                    text = (
+                        f"🔗 <b>קישור הורדה ישיר מוכן עבורך:</b>\n\n{link}\n\n"
+                        "⚠️ הקישור זמני — הורד בקרוב."
+                    )
+
                 await message.reply_text(
-                    f"🔗 <b>קישור הורדה ישיר מוכן עבורך:</b>\n\n{link}\n\n"
-                    "⚠️ הקישור זמני — הורד בקרוב.",
+                    text,
                     parse_mode="HTML", disable_web_page_preview=True
                 )
                 await db.mark_download_by_torbox_id_as_notified(torbox_id, user_id)
@@ -385,5 +405,3 @@ async def _handle_already_queued(user_id, name: str, thash: str, is_webdl: bool 
                 await reply_to_message.reply_text(progress_text, parse_mode="HTML")
             return True
     return False
-
-

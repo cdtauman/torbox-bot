@@ -16,6 +16,7 @@ import database as db
 from handlers import menu, search, filters as filt, download, status, settings, admin
 from handlers.auth import require_role
 from services import keyboards as kb
+from services.link_server import start_link_server, stop_link_server
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -266,6 +267,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def post_init(application: Application):
     await db.init_db()
     logger.info("Database initialized.")
+    await start_link_server(application)
     
     # רישום תפריט הפקודות בטלגרם
     commands = [
@@ -296,6 +298,7 @@ def main():
         Application.builder()
         .token(config.BOT_TOKEN)
         .post_init(post_init)
+        .post_shutdown(stop_link_server)
         .connect_timeout(30.0)
         .read_timeout(30.0)
         .write_timeout(30.0)
