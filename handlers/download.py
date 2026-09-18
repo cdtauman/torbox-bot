@@ -472,7 +472,14 @@ async def _handle_already_queued(user_id, name: str, thash: str, is_webdl: bool 
 
         # רישום ההורדה עבור משתמש זה במסד הנתונים כדי שיקבל התראה כשתסתיים
         if not await db.is_download_logged(user_id, tid):
-            await db.log_download(user_id, found_item.get("name") or name or "Download", found_item.get("size", 0), tid, thash)
+            await db.log_download(
+                user_id,
+                found_item.get("name") or name or "Download",
+                found_item.get("size", 0),
+                tid,
+                thash,
+                item_type="webdl" if is_webdl else "torrent",
+            )
 
         if finished:
             success_text = (
