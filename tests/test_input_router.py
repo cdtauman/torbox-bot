@@ -37,7 +37,7 @@ class InputRouterTests(unittest.TestCase):
 
     def test_log_summary_does_not_expose_secret_url(self):
         summary = safe_log_summary("https://example.com/file?token=very-secret")
-        self.assertIn("host=example.com", summary)
+        self.assertNotIn("example.com", summary)
         self.assertNotIn("very-secret", summary)
 
     def test_log_summary_does_not_expose_magnet(self):
