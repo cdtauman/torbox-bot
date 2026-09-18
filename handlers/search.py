@@ -202,17 +202,32 @@ def _result_key(item: dict) -> str:
 
 
 def _merge_results(groups: list[list[dict]]) -> list[dict]:
+    """ממזג round-robin כדי שמקור גדול אחד לא ידחוק החוצה את כל האחרים."""
     merged = []
     seen = set()
-    for group in groups:
-        for item in group or []:
-            key = _result_key(item)
-            if key in seen:
-                continue
-            seen.add(key)
-            merged.append(item)
+    groups = [list(group or []) for group in groups if group]
+    positions = [0] * len(groups)
+
+    while groups and len(merged) < config.SEARCH_LIMIT:
+        added_this_round = False
+        for idx, group in enumerate(groups):
+            while positions[idx] < len(group):
+                item = group[positions[idx]]
+                positions[idx] += 1
+                key = _result_key(item)
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(item)
+                added_this_round = True
+                break
+
             if len(merged) >= config.SEARCH_LIMIT:
-                return merged
+                break
+
+        if not added_this_round:
+            break
+
     return merged
 
 
