@@ -216,20 +216,39 @@ async def mark_download_as_notified(download_id: int):
         await db.commit()
 
 
-async def mark_download_by_torbox_id_as_notified(torbox_id, user_id: int):
-    """מסמן הורדה ככזו שנשלחה עבורה התראה לפי ה-torbox_id ומזהה המשתמש."""
+async def mark_download_by_torbox_id_as_notified(
+    torbox_id,
+    user_id: int,
+    item_type: str | None = None,
+):
+    """מסמן הורדה כנודעת, עם סוג מקור כדי למנוע התנגשות בין מזהים."""
     async with aiosqlite.connect(config.DB_PATH) as db:
-        await db.execute("UPDATE downloads SET notified=1 WHERE torbox_id=? AND user_id=?", (torbox_id, user_id))
+        if item_type in ("torrent", "usenet", "webdl"):
+            await db.execute(
+                "UPDATE downloads SET notified=1 WHERE torbox_id=? AND user_id=? AND item_type=?",
+                (torbox_id, user_id, item_type),
+            )
+        else:
+            await db.execute(
+                "UPDATE downloads SET notified=1 WHERE torbox_id=? AND user_id=?",
+                (torbox_id, user_id),
+            )
         await db.commit()
 
 
-async def is_download_logged(user_id: int, torbox_id) -> bool:
-    """בודק אם כבר קיימת רשומה פעילה (שטרם עודכנה לגביה התראה) עבור משתמש זה והורדה זו."""
+async def is_download_logged(user_id: int, torbox_id, item_type: str | None = None) -> bool:
+    """בודק אם כבר קיימת רשומת הורדה פעילה לאותו משתמש/מזהה/סוג."""
     async with aiosqlite.connect(config.DB_PATH) as db:
-        async with db.execute(
-            "SELECT 1 FROM downloads WHERE user_id=? AND torbox_id=? AND notified=0",
-            (user_id, torbox_id)
-        ) as cur:
+        if item_type in ("torrent", "usenet", "webdl"):
+            query = (
+                "SELECT 1 FROM downloads "
+                "WHERE user_id=? AND torbox_id=? AND item_type=? AND notified=0"
+            )
+            args = (user_id, torbox_id, item_type)
+        else:
+            query = "SELECT 1 FROM downloads WHERE user_id=? AND torbox_id=? AND notified=0"
+            args = (user_id, torbox_id)
+        async with db.execute(query, args) as cur:
             return bool(await cur.fetchone())
 
 
