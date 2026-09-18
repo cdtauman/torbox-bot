@@ -232,177 +232,152 @@ async def check_downloads_status(application):
             logger.warning("[MONITOR] Failed to notify user %s: %s", user_id, e)
 
 
+async def _delete_item(item_type: str, item_id):
+    if item_type == "usenet":
+        await torbox_api.delete_usenet(item_id)
+    elif item_type == "webdl":
+        await torbox_api.delete_webdl(item_id)
+    else:
+        await torbox_api.delete_torrent(int(item_id))
+    await db.disable_public_links_for_item(item_type, item_id)
+
+
 async def check_and_clean_old_torrents():
     """
-    מנגנון ניקוי אוטומטי המבוסס על שתי רמות:
-    1. מחיקת הורדות שהושלמו רק אם AUTO_DELETE_COMPLETED_AFTER_MINUTES חיובי.
-    2. מחיקת ההורדה הפעילה הכי ישנה במידה ויש הורדות בתור הממתינות ל-Slot פנוי.
+    שומר תאימות לשם הישן, אבל מטפל כיום בכל סוגי ההורדות:
+    Torrent, Usenet ו-WebDL.
     """
     try:
-        queued_torrents = await torbox_api.queued_list("torrent")
-        queued_webdls = await torbox_api.queued_list("webdl")
+        queued_torrents, queued_usenet, queued_webdls = await asyncio.gather(
+            torbox_api.queued_list("torrent"),
+            torbox_api.queued_list("usenet"),
+            torbox_api.queued_list("webdl"),
+        )
+        torrents, usenet, webdls = await asyncio.gather(
+            torbox_api.my_list(),
+            torbox_api.usenet_list(),
+            torbox_api.webdl_list(),
+        )
     except Exception as e:
-        logger.warning("[CLEANUP] Failed to fetch queued items: %s", e)
+        logger.warning("[CLEANUP] Failed to fetch TorBox items: %s", e)
         return
 
-    if isinstance(queued_torrents, dict):
-        queued_torrents = [queued_torrents]
-    queued_torrents = queued_torrents or []
-    
-    if isinstance(queued_webdls, dict):
-        queued_webdls = [queued_webdls]
-    queued_webdls = queued_webdls or []
+    queued_by_type = {
+        "torrent": _as_list(queued_torrents),
+        "usenet": _as_list(queued_usenet),
+        "webdl": _as_list(queued_webdls),
+    }
+    active_by_type = {
+        "torrent": _as_list(torrents),
+        "usenet": _as_list(usenet),
+        "webdl": _as_list(webdls),
+    }
+    total_queued = sum(len(items) for items in queued_by_type.values())
 
-    total_queued = len(queued_torrents) + len(queued_webdls)
-
-    try:
-        torrents = await torbox_api.my_list()
-        webdls = await torbox_api.webdl_list()
-    except Exception as e:
-        logger.warning("[CLEANUP] Failed to fetch active items: %s", e)
-        return
-
-    if isinstance(torrents, dict):
-        torrents = [torrents]
-    torrents = torrents or []
-
-    if isinstance(webdls, dict):
-        webdls = [webdls]
-    webdls = webdls or []
-
-    all_active = []
-    
     now = datetime.datetime.utcnow()
-
-    # בונים רשימה של הורדות פעילות/שהושלמו בשרת
-    for t in torrents:
-        c_time = parse_time(t.get("created_at"))
-        if c_time:
-            progress = t.get("progress", 0) or 0
-            pct = round(progress * 100) if progress <= 1 else round(progress)
-            finished = bool(t.get("download_finished") or t.get("download_present") or t.get("download_state") == "completed" or pct >= 100)
-            
+    all_active = []
+    for item_type, items in active_by_type.items():
+        for raw in items:
+            c_time = parse_time(raw.get("created_at"))
+            item_id = _item_id(raw, item_type)
+            if not c_time or not item_id:
+                continue
             all_active.append({
-                "id": t.get("id") or t.get("torrent_id"),
-                "name": t.get("name"),
+                "id": item_id,
+                "name": raw.get("name") or "?",
                 "created_at": c_time,
-                "is_webdl": False,
-                "finished": finished
-            })
-
-    for w in webdls:
-        c_time = parse_time(w.get("created_at"))
-        if c_time:
-            progress = w.get("progress", 0) or 0
-            pct = round(progress * 100) if progress <= 1 else round(progress)
-            finished = bool(w.get("download_finished") or w.get("download_present") or w.get("download_state") == "completed" or pct >= 100)
-            
-            all_active.append({
-                "id": w.get("id") or w.get("webdl_id"),
-                "name": w.get("name"),
-                "created_at": c_time,
-                "is_webdl": True,
-                "finished": finished
+                "item_type": item_type,
+                "finished": _is_finished(raw),
             })
 
     if not all_active:
         return
 
-    # ─── שלב 1: מחיקת קבצים שהושלמו לפי מדיניות retention ───
     deleted_any = False
     remaining_active = []
     completed_ttl = config.AUTO_DELETE_COMPLETED_AFTER_MINUTES
+
+    # 1. Retention להורדות שהושלמו.
     for item in all_active:
         age_minutes = (now - item["created_at"]).total_seconds() / 60.0
         if completed_ttl > 0 and item["finished"] and age_minutes >= completed_ttl:
             logger.info(
-                "[CLEANUP] Retention policy: Deleting finished download %r "
-                "(age %.1f min >= %s min)...",
+                "[CLEANUP] Deleting finished %s %r (age %.1f min >= %s).",
+                item["item_type"],
                 item["name"],
                 age_minutes,
                 completed_ttl,
             )
             try:
-                if item["is_webdl"]:
-                    await torbox_api.delete_webdl(item["id"])
-                    await db.disable_public_links_for_item("webdl", item["id"])
-                else:
-                    await torbox_api.delete_torrent(int(item["id"]))
-                    await db.disable_public_links_for_item("torrent", item["id"])
+                await _delete_item(item["item_type"], item["id"])
                 deleted_any = True
             except Exception as e:
-                logger.error("[CLEANUP] Failed to delete finished item %s: %s", item["id"], e)
+                logger.error(
+                    "[CLEANUP] Failed to delete finished %s %s: %s",
+                    item["item_type"],
+                    item["id"],
+                    e,
+                )
                 remaining_active.append(item)
         else:
             remaining_active.append(item)
 
-    # ─── שלב 2: מנגנון סבב הורדות (Queue Rotator) - רק אם יש קבצים שממתינים בתור ───
-    if total_queued > 0:
-        logger.info("[CLEANUP] Found %d items waiting in the queue. Evaluating active queue rotation...", total_queued)
-        if not remaining_active:
-            logger.info("[CLEANUP] No remaining active downloads found to rotate.")
-            return
-
-        rotation_candidates = remaining_active
+    # 2. אם יש תור תקוע, מפנים את ההורדה הפעילה הישנה ביותר לפי המדיניות.
+    if total_queued > 0 and remaining_active:
+        rotation_candidates = list(remaining_active)
         if completed_ttl <= 0:
-            rotation_candidates = [item for item in remaining_active if not item["finished"]]
-            if not rotation_candidates:
-                logger.info("[CLEANUP] Only finished downloads remain; keeping them for permanent links.")
-                return
+            rotation_candidates = [item for item in rotation_candidates if not item["finished"]]
 
-        # מיון לפי תאריך יצירה עולה (הכי ישן ראשון)
-        rotation_candidates.sort(key=lambda x: x["created_at"])
-        oldest = rotation_candidates[0]
+        if rotation_candidates:
+            oldest = min(rotation_candidates, key=lambda item: item["created_at"])
+            age_minutes = (now - oldest["created_at"]).total_seconds() / 60.0
+            rotate_after = config.QUEUE_ROTATE_ACTIVE_AFTER_MINUTES
 
-        age_minutes = (now - oldest["created_at"]).total_seconds() / 60.0
-        logger.info("[CLEANUP] Oldest active download is %r (ID: %s, created: %s), age is %.1f minutes", 
-                    oldest["name"], oldest["id"], oldest["created_at"], age_minutes)
+            if rotate_after > 0 and age_minutes >= rotate_after:
+                logger.info(
+                    "[CLEANUP] Rotating oldest %s %r (age %.1f min >= %s).",
+                    oldest["item_type"],
+                    oldest["name"],
+                    age_minutes,
+                    rotate_after,
+                )
+                try:
+                    await _delete_item(oldest["item_type"], oldest["id"])
+                    deleted_any = True
+                    remaining_active = [item for item in remaining_active if item is not oldest]
+                except Exception as e:
+                    logger.error(
+                        "[CLEANUP] Failed to rotate %s %s: %s",
+                        oldest["item_type"],
+                        oldest["id"],
+                        e,
+                    )
 
-        rotate_after = config.QUEUE_ROTATE_ACTIVE_AFTER_MINUTES
-        if rotate_after > 0 and age_minutes >= rotate_after:
-            logger.info(
-                "[CLEANUP] Queue Rotator: Deleting oldest active download %r "
-                "(age %.1f min >= %s min) to free up slot for queued items...",
-                oldest["name"],
-                age_minutes,
-                rotate_after,
-            )
-            try:
-                if oldest["is_webdl"]:
-                    await torbox_api.delete_webdl(oldest["id"])
-                    await db.disable_public_links_for_item("webdl", oldest["id"])
-                else:
-                    await torbox_api.delete_torrent(int(oldest["id"]))
-                    await db.disable_public_links_for_item("torrent", oldest["id"])
-                logger.info("[CLEANUP] Successfully deleted %r", oldest["name"])
-                deleted_any = True
-                remaining_active = [item for item in remaining_active if item is not oldest]
-            except Exception as e:
-                logger.error("[CLEANUP] Failed to rotate oldest item %s: %s", oldest["id"], e)
-        else:
-            logger.info(
-                "[CLEANUP] Oldest active download %r is only %.1f minutes old (< %s min). Waiting...",
-                oldest["name"],
-                age_minutes,
-                rotate_after,
-            )
-
-    # ─── שלב 3: הפעלה יזומה של ההורדה הבאה בתור במידה והתפנה slot ───
+    # 3. אחרי שהתפנה מקום, מתחילים פריט ממתין. סדר יציב: Torrent, Usenet, WebDL.
     if total_queued > 0 and (deleted_any or len(remaining_active) < 3):
         next_queued = None
-        qtype = "torrent"
-        if queued_torrents:
-            next_queued = queued_torrents[0]
-            qtype = "torrent"
-        elif queued_webdls:
-            next_queued = queued_webdls[0]
-            qtype = "webdl"
+        qtype = None
+        for candidate_type in ("torrent", "usenet", "webdl"):
+            if queued_by_type[candidate_type]:
+                next_queued = queued_by_type[candidate_type][0]
+                qtype = candidate_type
+                break
 
-        if next_queued:
-            qid = next_queued.get("id")
-            logger.info("[CLEANUP] Attempting to start queued item %r (ID: %s)...", next_queued.get("name"), qid)
-            try:
-                await torbox_api.control_queued(qid, "start", qtype)
-                logger.info("[CLEANUP] Successfully started queued item %r", next_queued.get("name"))
-            except Exception as e:
-                logger.warning("[CLEANUP] Failed to start queued item %s: %s", qid, e)
+        if next_queued and qtype:
+            qid = next_queued.get("id") or next_queued.get("queued_id")
+            if qid is not None:
+                try:
+                    await torbox_api.control_queued(qid, "start", qtype)
+                    logger.info(
+                        "[CLEANUP] Started queued %s item %r.",
+                        qtype,
+                        next_queued.get("name"),
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "[CLEANUP] Failed to start queued %s %s: %s",
+                        qtype,
+                        qid,
+                        e,
+                    )
+
