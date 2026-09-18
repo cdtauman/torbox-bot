@@ -33,8 +33,9 @@ async def prompt_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     text = (
         "🔍 <b>מה לחפש?</b>\n\n"
-        "שלח שם של סרט, סדרה, משחק או תוכנה.\n"
-        "טיפ: אפשר להוסיף איכות, למשל <code>Dune 2160p</code>"
+        "שלח שם מדויק ככל האפשר. הבוט יחפש יחד ב-Torrent וב-Usenet.\n"
+        "💡 עדיף להוסיף שנה / עונה / פרק כשיש שמות דומים.\n"
+        "לדוגמה: <code>Dune 2021 2160p</code>"
     )
     markup = kb.back_home()
     if q:
@@ -97,7 +98,7 @@ async def do_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["search_task"] = asyncio.current_task()
     logger.info(f"[SEARCH] START | user={user.id} | query={query!r}")
 
-    status_msg = await update.message.reply_text("🔍 מחפש בכל המקורות...", reply_markup=kb.cancel_search_keyboard())
+    status_msg = await update.message.reply_text("🔍 מחפש ב-Torrent + Usenet...", reply_markup=kb.cancel_search_keyboard())
 
     try:
         async with _SEARCH_SEMAPHORE:
@@ -183,36 +184,74 @@ async def do_debrid_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _render_results(status_msg, context, page=0)
 
 
-async def _search_provider(query: str):
-    provider = config.SEARCH_PROVIDER
-    
-    if provider == "prowlarr":
-        try:
-            return await prowlarr_api.search(query)
-        except Exception as exc:
-            logger.error("[SEARCH] Prowlarr failed or timed out: %s", exc)
-            # במקום לקרוס, נחזיר רשימה ריקה כדי שהמשתמש יראה "לא נמצאו תוצאות" בצורה נקייה
-            return []
-            
-    if provider == "auto":
-        try:
-            return await prowlarr_api.search(query)
-        except Exception as exc:
-            # תופס כעת גם ProwlarrError וגם TimeoutError מכל סוג שהוא!
-            logger.warning("[SEARCH] Prowlarr failed or timed out, falling back to TorBox: %s", exc)
-            try:
-                return await torbox_api.search(query)
-            except Exception as tb_exc:
-                logger.error("[SEARCH] TorBox backup search also failed: %s", tb_exc)
-                return []
-                
-    # ברירת מחדל - חיפוש ישיר ב-TorBox
+def _result_key(item: dict) -> str:
+    """מפתח דה-דופליקציה בין Prowlarr ל-TorBox."""
+    for field in ("hash", "info_hash"):
+        value = (item.get(field) or "").strip().lower()
+        if value:
+            return f"hash:{value}"
+
+    protocol = str(item.get("result_type") or item.get("protocol") or "torrent").lower()
+    for field in ("magnet", "nzb_url", "download_url", "torrent_url", "guid"):
+        value = (item.get(field) or "").strip().lower()
+        if value:
+            return f"{protocol}:{value}"
+
+    title = (item.get("title") or item.get("name") or item.get("raw_title") or "").strip().lower()
+    return f"{protocol}:{title}:{item.get('size') or 0}"
+
+
+def _merge_results(groups: list[list[dict]]) -> list[dict]:
+    merged = []
+    seen = set()
+    for group in groups:
+        for item in group or []:
+            key = _result_key(item)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+            if len(merged) >= config.SEARCH_LIMIT:
+                return merged
+    return merged
+
+
+async def _safe_search(label: str, awaitable):
     try:
-        return await torbox_api.search(query)
+        return await awaitable
     except Exception as exc:
-        logger.error("[SEARCH] TorBox search failed: %s", exc)
+        logger.warning("[SEARCH] %s failed: %s", label, exc)
         return []
 
+
+async def _search_provider(query: str):
+    provider = config.SEARCH_PROVIDER
+
+    if provider == "prowlarr":
+        return await _safe_search("Prowlarr", prowlarr_api.search(query))
+
+    if provider == "torbox":
+        return await _safe_search("TorBox", torbox_api.search(query))
+
+    # auto = מאחד את כל המקורות המוגדרים במקום fallback שרץ רק במקרה של שגיאה.
+    tasks = []
+    labels = []
+    if config.PROWLARR_URL and config.PROWLARR_API_KEY:
+        tasks.append(_safe_search("Prowlarr", prowlarr_api.search(query)))
+        labels.append("prowlarr")
+
+    tasks.append(_safe_search("TorBox", torbox_api.search(query)))
+    labels.append("torbox")
+
+    groups = await asyncio.gather(*tasks)
+    results = _merge_results(list(groups))
+    logger.info(
+        "[SEARCH] unified query=%r providers=%s total=%s",
+        query,
+        ",".join(labels),
+        len(results),
+    )
+    return results
 
 
 # ───────────────────────── רינדור תוצאות ─────────────────────────
