@@ -21,7 +21,12 @@ def persistent_menu():
         [KeyboardButton("📡 ההורדות שלי"), KeyboardButton("⚙️ הגדרות")],
         [KeyboardButton("ℹ️ עזרה")],
     ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
+    return ReplyKeyboardMarkup(
+        keyboard,
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="שלח שם, קישור, Magnet, hash, .torrent או .nzb",
+    )
 
 def debrid_menu():
     return InlineKeyboardMarkup([
