@@ -246,7 +246,11 @@ async def handle_torrent_file(update: Update, context: ContextTypes.DEFAULT_TYPE
         await tg_file.download_to_drive(path)
 
         with open(path, "rb") as f:
-            data = await torbox_api.add_torrent_file(safe_filename, f.read())
+            content = f.read()
+        if not content.startswith(b"d") or b"4:info" not in content[:65536]:
+            await status.edit_text("⚠️ הקובץ לא נראה כמו קובץ .torrent תקין.")
+            return
+        data = await torbox_api.add_torrent_file(safe_filename, content)
         torbox_id = (data or {}).get("torrent_id") or (data or {}).get("id")
         name = (data or {}).get("name") or safe_filename
         item_hash = (data or {}).get("hash") or (data or {}).get("info_hash") or ""
@@ -293,7 +297,12 @@ async def handle_nzb_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         path = os.path.join(tempfile.gettempdir(), f"{uuid.uuid4()}_{safe_filename}")
         await tg_file.download_to_drive(path)
         with open(path, "rb") as fh:
-            data = await torbox_api.add_nzb_file(safe_filename, fh.read())
+            content = fh.read()
+        preview = content[:4096].lower()
+        if b"<nzb" not in preview and b"<?xml" not in preview:
+            await status.edit_text("⚠️ הקובץ לא נראה כמו קובץ NZB תקין.")
+            return
+        data = await torbox_api.add_nzb_file(safe_filename, content)
 
         torbox_id = (data or {}).get("usenetdownload_id") or (data or {}).get("usenet_id") or (data or {}).get("id")
         item_hash = (data or {}).get("hash") or ""
@@ -373,7 +382,10 @@ async def handle_direct_url(
             "cannot be downloaded" in err_msg.lower()
             or "not supported" in err_msg.lower()
         ):
-            err_msg += "\n\nהקישור לא נתמך כרגע על ידי TorBox."
+            err_msg += (
+                "\n\nTorBox צריך קישור ישיר לקובץ; "
+                "עמוד אינטרנט או קישור שמבצע redirect עלולים לא לעבוד."
+            )
         logger.warning("[DIRECT URL] TorBox rejected type=%s: %s", item_type, e)
         await status.edit_text(
             f"⚠️ {err_msg}",
