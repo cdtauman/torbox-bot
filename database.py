@@ -309,7 +309,7 @@ async def record_public_link_access(token: str):
 
 async def disable_public_links_for_item(item_type: str, torbox_id):
     """מבטל קישורים ציבוריים לפריט שנמחק ידנית."""
-    item_type = "webdl" if item_type == "webdl" else "torrent"
+    item_type = item_type if item_type in ("torrent", "usenet", "webdl") else "torrent"
     async with aiosqlite.connect(config.DB_PATH) as db:
         await db.execute(
             "UPDATE public_links SET active=0 WHERE item_type=? AND torbox_id=?",
