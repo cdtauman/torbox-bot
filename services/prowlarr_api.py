@@ -6,7 +6,7 @@ Prowlarr רץ על השרת כ-indexer manager בלבד. הבוט משתמש ב�
 """
 import logging
 import re
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse, urlunparse
 
 import aiohttp
 
@@ -181,6 +181,9 @@ async def fetch_nzb(download_url: str) -> tuple[str, bytes]:
             if resp.status != 200:
                 detail = data.decode("utf-8", errors="replace")[:300]
                 raise ProwlarrError(f"לא הצלחתי להוריד NZB מ-Prowlarr: {detail or resp.status}")
+            preview = data[:4096].lower()
+            if b"<nzb" not in preview and b"<?xml" not in preview:
+                raise ProwlarrError("Prowlarr לא החזיר קובץ NZB תקין")
             filename = _filename_from_headers(resp.headers, default="prowlarr-result.nzb", suffix=".nzb")
             return filename, data
 
@@ -221,10 +224,33 @@ async def fetch_torrent(download_url: str) -> tuple[str, bytes]:
 
 
 def _absolute_url(url: str) -> str:
-    if url.startswith(("http://", "https://")):
-        url = url.replace("127.0.0.1:9696", "prowlarr:9696").replace("localhost:9696", "prowlarr:9696")
-        return url
-    return _base_url(url)
+    """
+    מחזיר URL שעובר תמיד דרך מופע Prowlarr שהוגדר.
+    כך לא מדליפים X-Api-Key ל-host חיצוני אם indexer מחזיר URL לא צפוי.
+    """
+    if not url.startswith(("http://", "https://")):
+        return _base_url(url)
+
+    target = urlparse(url)
+    base = urlparse(config.PROWLARR_URL)
+    target_host = (target.hostname or "").lower()
+    base_host = (base.hostname or "").lower()
+
+    local_aliases = {"127.0.0.1", "localhost", "prowlarr"}
+    allowed_hosts = {base_host} | local_aliases
+    if target_host not in allowed_hosts:
+        raise ProwlarrError("Prowlarr החזיר כתובת הורדה חיצונית לא צפויה")
+
+    # Prowlarr עשוי להחזיר localhost גם כשהבוט רץ ב-Docker ולהפך.
+    # משמרים path/query אבל תמיד משתמשים ב-origin שהוגדר ב-PROWLARR_URL.
+    return urlunparse((
+        base.scheme or target.scheme,
+        base.netloc or target.netloc,
+        target.path,
+        target.params,
+        target.query,
+        target.fragment,
+    ))
 
 
 def _filename_from_headers(headers, default="prowlarr-result.torrent", suffix=".torrent") -> str:
