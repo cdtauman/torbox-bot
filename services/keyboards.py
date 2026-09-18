@@ -19,7 +19,7 @@ def persistent_menu():
     keyboard = [
         [KeyboardButton("🔍 חיפוש")],
         [KeyboardButton("📡 ההורדות שלי"), KeyboardButton("⚙️ הגדרות")],
-        [KeyboardButton("🔗 קישור ישיר"), KeyboardButton("ℹ️ עזרה")],
+        [KeyboardButton("ℹ️ עזרה")],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
 
