@@ -49,6 +49,21 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
         await db.disable_public_links_for_item("usenet", 77)
         self.assertIsNone(await db.get_public_link(token))
 
+    async def test_notification_state_is_scoped_by_item_type(self):
+        await db.log_download(1, "Torrent", 1, 99, "hash", item_type="torrent")
+        await db.log_download(1, "Usenet", 1, 99, "", item_type="usenet")
+
+        await db.mark_download_by_torbox_id_as_notified(99, 1, item_type="usenet")
+
+        async with aiosqlite.connect(config.DB_PATH) as conn:
+            async with conn.execute(
+                "SELECT item_type, notified FROM downloads WHERE torbox_id=99 ORDER BY item_type"
+            ) as cur:
+                states = dict(await cur.fetchall())
+
+        self.assertEqual(states["torrent"], 0)
+        self.assertEqual(states["usenet"], 1)
+
     async def test_schema_contains_item_type_after_init(self):
         async with aiosqlite.connect(config.DB_PATH) as conn:
             async with conn.execute("PRAGMA table_info(downloads)") as cur:
