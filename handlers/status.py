@@ -293,55 +293,69 @@ async def confirm_clear_history(update: Update, context: ContextTypes.DEFAULT_TY
 
 @require_role(config.ROLE_USER)
 async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """מוחק את כל ההורדות שהושלמו (torrents + webdls)."""
+    """מוחק את כל ההורדות שהושלמו מכל שלושת הסוגים."""
+    import asyncio
+
     q = update.callback_query
     await q.answer("🗑️ מוחק היסטוריה...")
-    
+
     try:
-        torrents = await torbox_api.my_list()
-        webdls = await torbox_api.webdl_list()
+        torrents, usenet, webdls = await asyncio.gather(
+            torbox_api.my_list(),
+            torbox_api.usenet_list(),
+            torbox_api.webdl_list(),
+        )
     except Exception as e:
         await q.answer(f"שגיאה בקבלת ההורדות: {e}", show_alert=True)
         await show_status(update, context)
         return
 
-    if isinstance(torrents, dict):
-        torrents = [torrents]
-    torrents = torrents or []
+    def _as_list(value):
+        if isinstance(value, dict):
+            return [value]
+        return value or []
 
-    if isinstance(webdls, dict):
-        webdls = [webdls]
-    webdls = webdls or []
-    
-    import asyncio
     delete_tasks = []
     deleted_items = []
-    
-    # בדיקת טורנטים
-    for t in torrents:
-        tid = t.get("id") or t.get("torrent_id")
-        progress = t.get("progress", 0) or 0
-        pct = round(progress * 100) if progress <= 1 else round(progress)
-        finished = t.get("download_finished") or t.get("download_present") or pct >= 100
-        if finished and tid:
-            delete_tasks.append(torbox_api.delete_torrent(int(tid)))
-            deleted_items.append(("torrent", tid))
-            
-    # בדיקת הורדות ישירות
-    for w in webdls:
-        wid = w.get("id") or w.get("webdl_id")
-        progress = w.get("progress", 0) or 0
-        pct = round(progress * 100) if progress <= 1 else round(progress)
-        finished = w.get("download_finished") or w.get("download_present") or w.get("download_state") == "completed" or pct >= 100
-        if finished and wid:
-            delete_tasks.append(torbox_api.delete_webdl(str(wid)))
-            deleted_items.append(("webdl", wid))
-            
+
+    for item_type, items in (
+        ("torrent", _as_list(torrents)),
+        ("usenet", _as_list(usenet)),
+        ("webdl", _as_list(webdls)),
+    ):
+        for item in items:
+            item_id = (
+                item.get("id")
+                or item.get("torrent_id")
+                or item.get("usenet_id")
+                or item.get("usenetdownload_id")
+                or item.get("webdl_id")
+                or item.get("webdownload_id")
+            )
+            progress = item.get("progress", 0) or 0
+            pct = round(progress * 100) if progress <= 1 else round(progress)
+            finished = (
+                item.get("download_finished")
+                or item.get("download_present")
+                or item.get("download_state") == "completed"
+                or pct >= 100
+            )
+            if not finished or not item_id:
+                continue
+
+            if item_type == "torrent":
+                delete_tasks.append(torbox_api.delete_torrent(int(item_id)))
+            elif item_type == "usenet":
+                delete_tasks.append(torbox_api.delete_usenet(item_id))
+            else:
+                delete_tasks.append(torbox_api.delete_webdl(str(item_id)))
+            deleted_items.append((item_type, item_id))
+
     if not delete_tasks:
         await q.answer("📭 לא נמצאו הורדות שהושלמו למחיקה", show_alert=True)
         await show_status(update, context)
         return
-        
+
     try:
         await asyncio.gather(*delete_tasks)
         for item_type, item_id in deleted_items:
@@ -349,5 +363,6 @@ async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer("✅ היסטוריית ההורדות נמחקה בהצלחה!", show_alert=True)
     except Exception as e:
         await q.answer(f"חלק מהמחיקות נכשלו: {e}", show_alert=True)
-        
+
     await show_status(update, context)
+
