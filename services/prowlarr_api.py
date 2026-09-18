@@ -94,6 +94,20 @@ def _map_release(release: dict, cached_hashes: dict | None = None) -> dict:
     }
 
 
+def _is_cached(cache_data, thash: str) -> bool:
+    if not cache_data or not thash:
+        return False
+
+    value = cache_data.get(thash) or cache_data.get(thash.upper())
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, list):
+        return bool(value)
+    if isinstance(value, dict):
+        return bool(value.get("cached") or value.get("is_cached") or value.get("hash"))
+    return bool(value)
+
+
 async def _check_cached(releases: list[dict]) -> dict:
     hashes = sorted({_extract_hash(r) for r in releases if _extract_hash(r)})
     if not hashes:
