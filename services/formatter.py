@@ -22,7 +22,9 @@ def results_page(query, page_items, page, total_pages, total_results, active_fil
         if q:
             badges.append(q)
         if r.get("is_webdl"):
-            badges.append("📥 ישיר Debrid")
+            badges.append("🔗 WebDL")
+        elif r.get("is_usenet"):
+            badges.append("📰 Usenet")
         elif r.get("cached"):
             badges.append("⚡ בקאש")
         if r.get("owned"):
@@ -30,7 +32,7 @@ def results_page(query, page_items, page, total_pages, total_results, active_fil
         badge_str = "  •  ".join(badges)
 
         lines.append(f"{e} <b>{escape(r['name'][:70])}</b>")
-        if r.get("is_webdl"):
+        if r.get("is_webdl") or r.get("is_usenet"):
             meta = f"   📦 {parser.human_size(r['size'])}"
         else:
             meta = f"   📦 {parser.human_size(r['size'])}  🌱 {r['seeders']}  🔴 {r['leechers']}"
@@ -51,9 +53,9 @@ def results_page(query, page_items, page, total_pages, total_results, active_fil
 def item_detail(r):
     lines = [f"📋 <b>{escape(r['name'])}</b>\n"]
     lines.append(f"📦 גודל:    {parser.human_size(r['size'])}")
-    if not r.get("is_webdl"):
+    if not r.get("is_webdl") and not r.get("is_usenet"):
         lines.append(f"🌱 זרעים:   {r['seeders']}")
-        lines.append(f"🔴 מדיחים:  {r['leechers']}")
+        lines.append(f"🔴 עמיתים:  {r['leechers']}")
     q = config.QUALITY_LABELS.get(r.get("quality", "unknown"))
     if q and r.get("quality", "unknown") != "unknown":
         lines.append(f"🎬 איכות:   {q}")
@@ -66,7 +68,9 @@ def item_detail(r):
         lines.append(f"🔎 מקור:    {escape(r['tracker'])}")
     
     if r.get("is_webdl"):
-        status = "📥 הורדה ישירה דרך TorBox (Debrid)"
+        status = "🔗 הורדה ישירה דרך TorBox"
+    elif r.get("is_usenet"):
+        status = "📰 NZB דרך Usenet — TorBox יטפל בהורדה ובעיבוד"
     else:
         status = "⚡ כבר בקאש — הורדה מיידית!" if r.get("cached") else "📥 יורד לשרת TorBox בעת הוספה"
     lines.append(f"\n{status}")
@@ -91,7 +95,9 @@ def status_list(items, page=0, total_pages=1, total_items=0, start_index=1):
         finished = it.get("download_finished") or it.get("download_present") or pct >= 100
         size = parser.human_size(it.get("size", 0))
 
-        lines.append(f"<b>{i}. {name}</b>")
+        item_type = it.get("item_type") or ("webdl" if it.get("is_webdl") else "usenet" if it.get("is_usenet") else "torrent")
+        type_badge = {"torrent": "🧲", "usenet": "📰", "webdl": "🔗"}.get(item_type, "⬇️")
+        lines.append(f"<b>{i}. {type_badge} {name}</b>")
         if is_queued:
             lines.append(f"   ⏳ ממתין בתור (ממתין ל-Slot פנוי בשרת)")
         elif finished:
