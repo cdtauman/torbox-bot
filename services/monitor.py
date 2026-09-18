@@ -49,149 +49,187 @@ async def start_monitoring(application):
             logger.exception("Error in background download monitor: %s", e)
 
 
+def _as_list(value):
+    if isinstance(value, dict):
+        return [value]
+    return value or []
+
+
+def _item_id(item: dict, item_type: str) -> str:
+    fields = {
+        "torrent": ("id", "torrent_id"),
+        "usenet": ("id", "usenet_id", "usenetdownload_id"),
+        "webdl": ("id", "webdl_id", "webdownload_id"),
+    }[item_type]
+    for field in fields:
+        value = item.get(field)
+        if value is not None:
+            return str(value)
+    return ""
+
+
+def _is_finished(item: dict) -> bool:
+    progress = item.get("progress", 0) or 0
+    pct = progress * 100 if progress <= 1 else progress
+    return bool(
+        item.get("download_finished")
+        or item.get("download_present")
+        or item.get("download_state") == "completed"
+        or pct >= 100
+    )
+
+
+async def _request_link(item_type: str, item_id):
+    if item_type == "usenet":
+        return await torbox_api.request_usenet_link(item_id)
+    if item_type == "webdl":
+        return await torbox_api.request_webdl_link(item_id)
+    return await torbox_api.request_download_link(item_id)
+
+
 async def check_downloads_status(application):
-    """בודק את סטטוס ההורדות שעדיין לא נשלחה עבורן התראה."""
-    # 1. שליפת הורדות לא מדווחות מבסיס הנתונים
+    """בודק השלמות ושולח התראות עבור Torrent, Usenet ו-WebDL."""
     unnotified = await db.get_unnotified_downloads()
     if not unnotified:
         return
 
-    # מיפוי לפי torbox_id ולפי hash לצורך חיפוש מהיר
-    db_map_by_id = {}
-    db_map_by_hash = {}
-    for dl in unnotified:
-        tid = dl.get("torbox_id")
-        thash = dl.get("hash")
-        if tid is not None:
-            db_map_by_id.setdefault(str(tid), []).append(dl)
-        if thash:
-            db_map_by_hash.setdefault(thash.lower().strip(), []).append(dl)
-
-    if not db_map_by_id and not db_map_by_hash:
-        return
-
-    # 2. שליפת רשימת ההורדות הפעילות מ-TorBox
     try:
-        torbox_items = await torbox_api.my_list()
+        torrents, usenet, webdls = await asyncio.gather(
+            torbox_api.my_list(),
+            torbox_api.usenet_list(),
+            torbox_api.webdl_list(),
+        )
     except Exception as e:
-        logger.warning("[MONITOR] Failed to fetch my_list from TorBox: %s", e)
+        logger.warning("[MONITOR] Failed to fetch TorBox download lists: %s", e)
         return
 
-    if isinstance(torbox_items, dict):
-        torbox_items = [torbox_items]
-    torbox_items = torbox_items or []
+    items_by_type = {
+        "torrent": _as_list(torrents),
+        "usenet": _as_list(usenet),
+        "webdl": _as_list(webdls),
+    }
 
-    # 3. מעבר על ההורדות מתוך TorBox ובדיקה אם הן הושלמו
-    for item in torbox_items:
-        tid = str(item.get("id") or item.get("torrent_id") or "")
-        item_hash = (item.get("hash") or item.get("info_hash") or "").lower().strip()
+    by_type_and_id = {}
+    torrent_by_hash = {}
+    for item_type, items in items_by_type.items():
+        for item in items:
+            tid = _item_id(item, item_type)
+            if tid:
+                by_type_and_id[(item_type, tid)] = item
+            if item_type == "torrent":
+                item_hash = (item.get("hash") or item.get("info_hash") or "").lower().strip()
+                if item_hash:
+                    torrent_by_hash[item_hash] = item
 
-        # חיפוש רשומות מתאימות בבסיס הנתונים
-        matching_dls = []
-        if tid in db_map_by_id:
-            matching_dls.extend(db_map_by_id[tid])
-        if item_hash and item_hash in db_map_by_hash:
-            for dl in db_map_by_hash[item_hash]:
-                if dl not in matching_dls:
-                    matching_dls.append(dl)
+    for dl in unnotified:
+        item_type = dl.get("item_type") or "torrent"
+        if item_type not in ("torrent", "usenet", "webdl"):
+            item_type = "torrent"
 
-        if not matching_dls:
+        tid = str(dl.get("torbox_id") or "")
+        item = by_type_and_id.get((item_type, tid))
+
+        if not item and item_type == "torrent":
+            thash = (dl.get("hash") or "").lower().strip()
+            if thash:
+                item = torrent_by_hash.get(thash)
+                if item:
+                    tid = _item_id(item, "torrent")
+
+        if not item or not _is_finished(item):
             continue
 
-        # בדיקה האם ההורדה הסתיימה
-        finished = bool(
-            item.get("download_finished") or 
-            item.get("download_present") or 
-            (item.get("progress", 0) or 0) >= 1
+        logger.info(
+            "[MONITOR] %s %s finished. Preparing notification for user=%s.",
+            item_type,
+            tid,
+            dl.get("user_id"),
         )
-        if not finished:
-            continue
 
-        # הורדה הסתיימה! משיכת קישור הורדה ישיר
-        logger.info("[MONITOR] Torrent %s (ID: %s) finished. Preparing notifications.", item.get("name"), tid)
         link = None
         try:
-            dl_data = await torbox_api.request_download_link(tid)
-            if isinstance(dl_data, str):
-                link = dl_data
-            elif isinstance(dl_data, dict):
-                link = dl_data.get("link")
+            link_data = await _request_link(item_type, tid)
+            if isinstance(link_data, str):
+                link = link_data
+            elif isinstance(link_data, dict):
+                link = link_data.get("link") or link_data.get("url")
         except Exception as e:
-            logger.warning("[MONITOR] Failed to fetch download link for %s: %s", tid, e)
+            logger.warning("[MONITOR] Failed to fetch %s link for %s: %s", item_type, tid, e)
 
-        # שליחת התראה לכל משתמש שביקש את הטורנט הזה
-        for dl in matching_dls:
-            user_id = dl["user_id"]
+        user_id = dl["user_id"]
+        user = await db.get_user(user_id)
+        notify_enabled = True
+        if user and isinstance(user.get("settings"), dict):
+            notify_enabled = bool(user["settings"].get("notify", 1))
 
-            # בדיקה האם המשתמש הפעיל התראות בהגדרות שלו
-            user = await db.get_user(user_id)
-            notify_enabled = True
-            if user and isinstance(user.get("settings"), dict):
-                notify_enabled = bool(user["settings"].get("notify", 1))
+        if not notify_enabled:
+            await db.mark_download_as_notified(dl["id"])
+            continue
 
-            if notify_enabled:
+        try:
+            if link:
+                public_url = None
                 try:
-                    if link:
-                        public_url = None
-                        try:
-                            public_url = await public_links.get_or_create_download_url(
-                                user_id=user_id,
-                                item_type="torrent",
-                                torbox_id=tid,
-                                name=dl.get("name", ""),
-                            )
-                        except Exception as e:
-                            logger.warning("[MONITOR] Failed to create public link for %s: %s", tid, e)
-
-                        download_url = public_url or link
-                        link_label = "קישור הורדה קבוע" if public_url else "קישור הורדה ישיר"
-                        link_note = (
-                            "הקישור יוצר קישור TorBox חדש בכל לחיצה, בלי לחשוף את ה-API key."
-                            if public_url
-                            else "⚠️ הקישור זמני — הורד בקרוב."
-                        )
-                        text = (
-                            f"🎉 <b>ההורדה שלך מוכנה!</b>\n\n"
-                            f"📋 {dl['name'][:100]}\n\n"
-                            f"🔗 <b>{link_label}:</b>\n{download_url}\n\n"
-                            f"{link_note}"
-                        )
-                        await application.bot.send_message(
-                            chat_id=user_id,
-                            text=text,
-                            parse_mode="HTML",
-                            disable_web_page_preview=True
-                        )
-                        await db.mark_download_as_notified(dl["id"])
-                        logger.info("[MONITOR] Successfully notified user %s with link for %s", user_id, dl["name"])
-                    else:
-                        # אם עבר פחות מ-60 דקות מאז שהטורנט נוצר, נמתין לסיבוב הבא כדי לקבל קישור תקין
-                        c_time = parse_time(item.get("created_at"))
-                        now = datetime.datetime.utcnow()
-                        age_min = (now - c_time).total_seconds() / 60.0 if c_time else 999
-                        
-                        if age_min >= 60:
-                            text = (
-                                f"🎉 <b>ההורדה שלך מוכנה!</b>\n\n"
-                                f"📋 {dl['name'][:100]}\n\n"
-                                f"📡 ניתן לקבל את קישור ההורדה מתפריט 'ההורדות שלי'."
-                            )
-                            await application.bot.send_message(
-                                chat_id=user_id,
-                                text=text,
-                                parse_mode="HTML",
-                                disable_web_page_preview=True
-                            )
-                            await db.mark_download_as_notified(dl["id"])
-                            logger.info("[MONITOR] Notified user %s without link (timeout) for %s", user_id, dl["name"])
-                        else:
-                            logger.info("[MONITOR] Link for %s (ID: %s) is not ready yet (age: %.1f min). Retrying in next cycle...", dl["name"], tid, age_min)
+                    public_url = await public_links.get_or_create_download_url(
+                        user_id=user_id,
+                        item_type=item_type,
+                        torbox_id=tid,
+                        name=dl.get("name", ""),
+                    )
                 except Exception as e:
-                    logger.warning("[MONITOR] Failed to send message to user %s: %s", user_id, e)
-            else:
-                # משתמש כיבה התראות - פשוט מסמנים כנודע
-                await db.mark_download_as_notified(dl["id"])
+                    logger.warning("[MONITOR] Failed to create public link for %s: %s", tid, e)
 
+                download_url = public_url or link
+                source_badge = {
+                    "torrent": "🧲 Torrent",
+                    "usenet": "📰 Usenet",
+                    "webdl": "🔗 WebDL",
+                }[item_type]
+                link_label = "קישור הורדה קבוע" if public_url else "קישור הורדה ישיר"
+                link_note = (
+                    "הקישור מרענן קישור TorBox בכל לחיצה."
+                    if public_url
+                    else "⚠️ הקישור זמני — מומלץ להשתמש בו בקרוב."
+                )
+                text = (
+                    f"🎉 <b>ההורדה שלך מוכנה!</b>\n\n"
+                    f"📋 {dl['name'][:100]}\n"
+                    f"🌐 {source_badge}\n\n"
+                    f"🔗 <b>{link_label}:</b>\n{download_url}\n\n"
+                    f"{link_note}"
+                )
+                await application.bot.send_message(
+                    chat_id=user_id,
+                    text=text,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                )
+                await db.mark_download_as_notified(dl["id"])
+            else:
+                c_time = parse_time(item.get("created_at"))
+                now = datetime.datetime.utcnow()
+                age_min = (now - c_time).total_seconds() / 60.0 if c_time else 999
+
+                if age_min >= 60:
+                    await application.bot.send_message(
+                        chat_id=user_id,
+                        text=(
+                            "🎉 <b>ההורדה שלך מוכנה!</b>\n\n"
+                            f"📋 {dl['name'][:100]}\n\n"
+                            "📡 ניתן לקבל את הקישור מתפריט 'ההורדות שלי'."
+                        ),
+                        parse_mode="HTML",
+                    )
+                    await db.mark_download_as_notified(dl["id"])
+                else:
+                    logger.info(
+                        "[MONITOR] Link for %s %s is not ready yet (age %.1f min).",
+                        item_type,
+                        tid,
+                        age_min,
+                    )
+        except Exception as e:
+            logger.warning("[MONITOR] Failed to notify user %s: %s", user_id, e)
 
 
 async def check_and_clean_old_torrents():
