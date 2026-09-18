@@ -74,6 +74,8 @@ async def handle_public_download(request: web.Request) -> web.StreamResponse:
     try:
         if item_type == "webdl":
             data = await torbox_api.request_webdl_link(torbox_id, file_id=file_id)
+        elif item_type == "usenet":
+            data = await torbox_api.request_usenet_link(torbox_id, file_id=file_id)
         else:
             data = await torbox_api.request_download_link(torbox_id, file_id=file_id)
 
