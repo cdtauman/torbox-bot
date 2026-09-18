@@ -15,7 +15,7 @@ import config
 import database as db
 from handlers import menu, search, filters as filt, download, status, settings, admin
 from handlers.auth import require_role
-from services import keyboards as kb
+from services import keyboards as kb, input_router
 from services.link_server import start_link_server, stop_link_server
 
 logging.basicConfig(
@@ -43,7 +43,12 @@ async def log_all_updates(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message:
         msg = update.message
         if msg.text:
-            logger.info(f"[MSG] user={uid} ({uname}) | text={msg.text!r}")
+            logger.info(
+                "[MSG] user=%s (%s) | %s",
+                uid,
+                uname,
+                input_router.safe_log_summary(msg.text),
+            )
         elif msg.document:
             logger.info(f"[DOC] user={uid} ({uname}) | file={msg.document.file_name!r} size={msg.document.file_size}")
         elif msg.photo:
@@ -82,14 +87,19 @@ def clear_user_states(user_data: dict):
 # ───────────────────────── ראוטר טקסט חופשי ─────────────────────────
 async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    מנתב הודעות טקסט:
-    - magnet link  → הורדה
-    - מצב שידור    → שידור (אדמין)
-    - אחרת         → חיפוש
+    מנתב הודעות טקסט בצורה חכמה:
+    - magnet / info-hash → Torrent
+    - URL → הורדה ישירה
+    - URL שמסתיים ב-.nzb → Usenet
+    - טקסט רגיל → חיפוש
     """
     text = (update.message.text or "").strip()
     user = update.effective_user
-    logger.debug(f"[ROUTER] text_router: user={user.id} text={text[:80]!r}")
+    logger.debug(
+        "[ROUTER] text_router: user=%s | %s",
+        user.id,
+        input_router.safe_log_summary(text),
+    )
 
     # שידור ממתין?
     if context.user_data.get("awaiting_broadcast"):
@@ -125,14 +135,36 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await cmd_cancel(update, context)
         return
 
-    # magnet?
-    if text.lower().startswith("magnet:?"):
-        logger.debug(f"[ROUTER] → handle_magnet (user={user.id})")
+    intent = input_router.classify_text(text)
+
+    if intent.kind == "empty":
+        await update.message.reply_text(
+            "שלח שם לחיפוש, קישור, Magnet, hash, קובץ .torrent או .nzb."
+        )
+        return
+
+    if intent.kind == "magnet":
+        logger.debug("[ROUTER] → handle_magnet (user=%s)", user.id)
         await download.handle_magnet(update, context)
         return
 
+    if intent.kind == "torrent_hash":
+        logger.debug("[ROUTER] → handle_torrent_hash (user=%s)", user.id)
+        await download.handle_torrent_hash(update, context, intent.value)
+        return
+
+    if intent.kind in ("url", "nzb_url"):
+        logger.debug("[ROUTER] → handle_direct_url (user=%s kind=%s)", user.id, intent.kind)
+        await download.handle_direct_url(
+            update,
+            context,
+            link=intent.value,
+            as_usenet=intent.kind == "nzb_url",
+        )
+        return
+
     # אחרת — חיפוש
-    logger.debug(f"[ROUTER] → do_search (user={user.id}) query={text[:80]!r}")
+    logger.debug("[ROUTER] → do_search (user=%s)", user.id)
     await search.do_search(update, context)
 
 
