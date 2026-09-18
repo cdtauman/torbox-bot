@@ -20,32 +20,47 @@ from services import torbox_api, prowlarr_api, keyboards as kb, formatter as fmt
 
 # ───────────────────────── הורדה מתוצאה ─────────────────────────
 async def download_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """dl:<gidx> — מוסיף את הטוררנט הנבחר ל-TorBox."""
+    """dl:<gidx> — מוסיף את התוצאה ל-TorBox לפי סוג המקור."""
     q = update.callback_query
     gidx = int(q.data.split(":")[1])
     filtered = context.user_data.get("filtered", [])
     if gidx >= len(filtered):
         await q.answer("התוצאה כבר לא זמינה", show_alert=True)
         return
+
     r = filtered[gidx]
+    result_type = r.get("result_type", "torrent")
     await q.answer("📥 מוסיף ל-TorBox...")
 
-    msg = "⚡ כבר בקאש! מוסיף ומכין הורדה..." if r["cached"] else "📥 שולח לשרת TorBox..."
+    if result_type == "usenet":
+        msg = "📰 שולח NZB ל-TorBox..."
+    elif r.get("cached"):
+        msg = "⚡ כבר בקאש! מכין הורדה..."
+    else:
+        msg = "📥 שולח ל-TorBox..."
     await q.edit_message_text(msg)
 
     try:
         magnet = r.get("magnet")
         torrent_url = r.get("torrent_url")
+        nzb_url = r.get("nzb_url")
         source = r.get("source")
 
-        if r.get("is_webdl"):
+        if result_type == "webdl":
             webdl_link = magnet or torrent_url
-            if webdl_link:
-                logger.info(f"[DOWNLOAD] Sending WebDL link to TorBox: {webdl_link[:80]}")
-                data = await torbox_api.create_webdl(webdl_link)
-                is_webdl_download = True
-            else:
+            if not webdl_link:
                 raise ValueError("לא נמצא קישור תקין להורדה")
+            data = await torbox_api.create_webdl(webdl_link)
+
+        elif result_type == "usenet":
+            if source == "prowlarr" and nzb_url:
+                filename, content = await prowlarr_api.fetch_nzb(nzb_url)
+                data = await torbox_api.add_nzb_file(filename, content, name=r.get("name", ""))
+            elif nzb_url:
+                data = await torbox_api.add_nzb_url(nzb_url, name=r.get("name", ""))
+            else:
+                raise ValueError("לתוצאת Usenet הזו אין קישור NZB תקין")
+
         elif r.get("cached") and magnet:
             data = await torbox_api.add_magnet(magnet)
         elif magnet and not r.get("generated_magnet"):
@@ -61,47 +76,77 @@ async def download_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif r.get("hash"):
             data = await torbox_api.add_hash(r["hash"])
         else:
-            await q.edit_message_text("⚠️ לתוצאה הזו אין magnet, hash או קובץ torrent.", reply_markup=kb.back_home())
+            await q.edit_message_text(
+                "⚠️ לתוצאה הזו אין קישור הורדה usable.",
+                reply_markup=kb.back_home(),
+            )
             return
+
     except prowlarr_api.ProwlarrError as e:
         await q.edit_message_text(f"⚠️ {e}", reply_markup=kb.back_home())
         return
     except torbox_api.TorBoxError as e:
         err_msg = str(e)
-        if "already queued" in err_msg.lower():
-            handled = await _handle_already_queued(q.from_user.id, r.get("name"), r.get("hash"), is_webdl=r.get("is_webdl", False), status_msg=q.message)
+        if "already queued" in err_msg.lower() and result_type != "usenet":
+            handled = await _handle_already_queued(
+                q.from_user.id,
+                r.get("name"),
+                r.get("hash"),
+                is_webdl=result_type == "webdl",
+                status_msg=q.message,
+            )
             if handled:
                 return
-        if "cannot be downloaded" in err_msg.lower() or "not supported" in err_msg.lower():
-            err_msg += "\n\nייתכן שה-Hoster (למשל Rapidgator) כרגע לא זמין ב-TorBox.\nבדוק ב: https://torbox.app/hosters"
-        await q.edit_message_text(f"⚠️ {err_msg}", reply_markup=kb.back_home(), disable_web_page_preview=True)
+        if result_type == "webdl" and ("cannot be downloaded" in err_msg.lower() or "not supported" in err_msg.lower()):
+            err_msg += "\n\nייתכן שהשרת החיצוני אינו זמין כרגע ב-TorBox."
+        await q.edit_message_text(
+            f"⚠️ {err_msg}",
+            reply_markup=kb.back_home(),
+            disable_web_page_preview=True,
+        )
         return
-
     except Exception as e:
+        logger.exception("[DOWNLOAD] Failed to add result type=%s", result_type)
         await q.edit_message_text(f"⚠️ שגיאה: {e}", reply_markup=kb.back_home())
         return
 
-    is_webdl_download = r.get("is_webdl", False)
-    if is_webdl_download:
-        torbox_id = (data or {}).get("webdownload_id") or (data or {}).get("data", {}).get("webdownload_id")
+    if result_type == "webdl":
+        torbox_id = (data or {}).get("webdownload_id") or (data or {}).get("id")
+    elif result_type == "usenet":
+        torbox_id = (data or {}).get("usenetdownload_id") or (data or {}).get("usenet_id") or (data or {}).get("id")
     else:
         torbox_id = (data or {}).get("torrent_id") or (data or {}).get("id")
-    logger.info(f"[DOWNLOAD] TorBox returned id={torbox_id} | is_webdl={is_webdl_download} | raw_data={data}")
-        
-    await db.log_download(q.from_user.id, r["name"], r["size"], torbox_id, r.get("hash", ""))
 
-    eta = "מיידית ⚡" if r["cached"] else "מספר דקות"
+    logger.info("[DOWNLOAD] TorBox returned id=%s | type=%s", torbox_id, result_type)
+    await db.log_download(
+        q.from_user.id,
+        r["name"],
+        r["size"],
+        torbox_id,
+        r.get("hash", ""),
+        item_type=result_type,
+    )
+
+    eta = "מיידית ⚡" if r.get("cached") else "תלוי בגודל ובזמינות המקור"
     await q.edit_message_text(
         f"✅ <b>נוסף בהצלחה!</b>\n\n"
         f"📋 {fmt.escape(r['name'][:60])}\n"
         f"📦 {parser.human_size(r['size'])}\n"
-        f"⏱ זמן משוער: {eta}\n\n"
+        f"🌐 מקור: {fmt.escape(result_type)}\n"
+        f"⏱ {eta}\n\n"
         f"עקוב אחר ההתקדמות ב'ההורדות שלי' 📡",
         parse_mode="HTML",
-        reply_markup=kb.main_menu(await _is_admin(q.from_user.id)))
+        reply_markup=kb.main_menu(await _is_admin(q.from_user.id)),
+    )
 
     if torbox_id:
-        await _try_send_direct_link(q.message, torbox_id, q.from_user.id, is_webdl=is_webdl_download)
+        await _try_send_direct_link(
+            q.message,
+            torbox_id,
+            q.from_user.id,
+            is_webdl=result_type == "webdl",
+            is_usenet=result_type == "usenet",
+        )
 
 
 # ───────────────────────── magnet ישיר ─────────────────────────
@@ -183,6 +228,56 @@ async def handle_torrent_file(update: Update, context: ContextTypes.DEFAULT_TYPE
                 pass
 
 
+# ───────────────────────── קובץ .nzb ─────────────────────────
+@require_role(config.ROLE_USER)
+async def handle_nzb_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    doc = update.message.document
+    if not doc or not doc.file_name or not doc.file_name.lower().endswith(".nzb"):
+        return
+
+    status = await update.message.reply_text("📰 מעבד את קובץ ה-NZB...")
+    path = ""
+    try:
+        tg_file = await doc.get_file()
+        safe_filename = os.path.basename(doc.file_name) or "download.nzb"
+        path = os.path.join(tempfile.gettempdir(), f"{uuid.uuid4()}_{safe_filename}")
+        await tg_file.download_to_drive(path)
+        with open(path, "rb") as fh:
+            data = await torbox_api.add_nzb_file(safe_filename, fh.read())
+
+        torbox_id = (data or {}).get("usenetdownload_id") or (data or {}).get("usenet_id") or (data or {}).get("id")
+        item_hash = (data or {}).get("hash") or ""
+        await db.log_download(
+            update.effective_user.id,
+            safe_filename,
+            0,
+            torbox_id,
+            item_hash,
+            item_type="usenet",
+        )
+        await status.edit_text(
+            f"✅ NZB נוסף בהצלחה!\n📋 {fmt.escape(safe_filename[:60])}\n\n"
+            "עקוב ב'ההורדות שלי' 📡",
+            parse_mode="HTML",
+        )
+        if torbox_id:
+            await _try_send_direct_link(
+                update.message,
+                torbox_id,
+                update.effective_user.id,
+                is_usenet=True,
+            )
+    except Exception as e:
+        logger.exception("[NZB] Failed to process uploaded NZB")
+        await status.edit_text(f"⚠️ שגיאה בעיבוד NZB: {e}")
+    finally:
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+
+
 # ───────────────────────── הורדה ישירה (Debrid) ─────────────────────────
 @require_role(config.ROLE_USER)
 async def handle_debrid_convert(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -226,7 +321,14 @@ async def handle_debrid_convert(update: Update, context: ContextTypes.DEFAULT_TY
     torbox_id = (data or {}).get("webdownload_id") or (data or {}).get("data", {}).get("webdownload_id")
     name = (data or {}).get("name") or (data or {}).get("data", {}).get("name") or "WebDL Download"
     logger.info(f"[DEBRID CONVERT] Success: torbox_id={torbox_id} | name={name} | raw_data={data}")
-    await db.log_download(update.effective_user.id, name, 0, torbox_id, "")
+    await db.log_download(
+        update.effective_user.id,
+        name,
+        0,
+        torbox_id,
+        "",
+        item_type="webdl",
+    )
     await status.edit_text(
         f"✅ נוסף בהצלחה להורדות ישירות!\n📋 {fmt.escape(name[:60])}\n\n"
         f"עקוב ב'ההורדות שלי' 📡",
@@ -235,13 +337,15 @@ async def handle_debrid_convert(update: Update, context: ContextTypes.DEFAULT_TY
     if torbox_id:
         await _try_send_direct_link(update.message, torbox_id, update.effective_user.id, is_webdl=True)
 
-async def _try_send_direct_link(message, torbox_id, user_id, is_webdl=False):
-    # Try up to 3 times to get the link if the torrent is cached, since TorBox API might take a few seconds to process
+async def _try_send_direct_link(message, torbox_id, user_id, is_webdl=False, is_usenet=False):
+    # TorBox may need a few seconds before a just-added item can return a direct link.
     for attempt in range(3):
         try:
             await asyncio.sleep(1.5)
             if is_webdl:
                 dl_data = await torbox_api.request_webdl_link(torbox_id)
+            elif is_usenet:
+                dl_data = await torbox_api.request_usenet_link(torbox_id)
             else:
                 dl_data = await torbox_api.request_download_link(torbox_id)
             link = None
@@ -255,7 +359,7 @@ async def _try_send_direct_link(message, torbox_id, user_id, is_webdl=False):
                 try:
                     public_url = await public_links.get_or_create_download_url(
                         user_id=user_id,
-                        item_type="webdl" if is_webdl else "torrent",
+                        item_type="webdl" if is_webdl else "usenet" if is_usenet else "torrent",
                         torbox_id=torbox_id,
                     )
                 except Exception as e:
@@ -276,7 +380,11 @@ async def _try_send_direct_link(message, torbox_id, user_id, is_webdl=False):
                     text,
                     parse_mode="HTML", disable_web_page_preview=True
                 )
-                await db.mark_download_by_torbox_id_as_notified(torbox_id, user_id)
+                await db.mark_download_by_torbox_id_as_notified(
+                    torbox_id,
+                    user_id,
+                    item_type="webdl" if is_webdl else "usenet" if is_usenet else "torrent",
+                )
                 return
         except Exception:
             pass
@@ -367,8 +475,16 @@ async def _handle_already_queued(user_id, name: str, thash: str, is_webdl: bool 
         finished = found_item.get("download_finished") or found_item.get("download_present") or found_item.get("download_state") == "completed" or pct >= 100
 
         # רישום ההורדה עבור משתמש זה במסד הנתונים כדי שיקבל התראה כשתסתיים
-        if not await db.is_download_logged(user_id, tid):
-            await db.log_download(user_id, found_item.get("name") or name or "Download", found_item.get("size", 0), tid, thash)
+        duplicate_type = "webdl" if is_webdl else "torrent"
+        if not await db.is_download_logged(user_id, tid, duplicate_type):
+            await db.log_download(
+                user_id,
+                found_item.get("name") or name or "Download",
+                found_item.get("size", 0),
+                tid,
+                thash,
+                item_type="webdl" if is_webdl else "torrent",
+            )
 
         if finished:
             success_text = (

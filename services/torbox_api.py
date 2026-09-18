@@ -330,6 +330,85 @@ async def delete_torrent(torrent_id):
     return await control(torrent_id, "delete")
 
 
+# ───────────────────────── Usenet / NZB ─────────────────────────
+async def add_nzb_file(filename: str, content: bytes, name: str = ""):
+    """מעלה קובץ NZB ל-TorBox עם post-processing ברירת מחדל."""
+    async with aiohttp.ClientSession() as session:
+        form = aiohttp.FormData()
+        form.add_field(
+            "file",
+            content,
+            filename=filename or "download.nzb",
+            content_type="application/x-nzb",
+        )
+        if name:
+            form.add_field("name", name)
+        form.add_field("post_processing", "-1")
+        return await _post(session, "/usenet/createusenetdownload", data_body=form)
+
+
+async def add_nzb_url(link: str, name: str = ""):
+    """מוסיף URL ישיר לקובץ NZB ל-TorBox."""
+    async with aiohttp.ClientSession() as session:
+        form = aiohttp.FormData()
+        form.add_field("link", link)
+        if name:
+            form.add_field("name", name)
+        form.add_field("post_processing", "-1")
+        return await _post(session, "/usenet/createusenetdownload", data_body=form)
+
+
+async def usenet_list(usenet_id=None):
+    """רשימת הורדות Usenet; אם נתון id מחזיר פריט יחיד."""
+    params = {"bypass_cache": "true"}
+    if usenet_id is not None:
+        params["id"] = str(usenet_id)
+    async with aiohttp.ClientSession() as session:
+        return await _get(session, "/usenet/mylist", params=params)
+
+
+async def request_usenet_link(usenet_id, file_id=None):
+    """מבקש קישור הורדה זמני להורדת Usenet שהושלמה."""
+    if file_id is None:
+        try:
+            item = await usenet_list(usenet_id)
+            if item:
+                if isinstance(item, list):
+                    item = item[0]
+                files = item.get("files", [])
+                if files:
+                    largest_file = max(files, key=lambda f: f.get("size", 0))
+                    file_id = largest_file.get("id")
+        except Exception as e:
+            logger.warning(
+                "Failed to automatically detect largest file ID for usenet %s: %s",
+                usenet_id,
+                e,
+            )
+
+    params = {"token": config.TORBOX_API_KEY, "usenet_id": str(usenet_id)}
+    if file_id is not None:
+        params["file_id"] = str(file_id)
+    else:
+        params["zip_link"] = "true"
+    async with aiohttp.ClientSession() as session:
+        return await _get(session, "/usenet/requestdl", params=params)
+
+
+async def control_usenet(usenet_id, operation: str):
+    """פעולות שליטה ב-Usenet: delete, pause, resume."""
+    async with aiohttp.ClientSession() as session:
+        return await _post(
+            session,
+            "/usenet/controlusenetdownload",
+            json_body={"usenet_id": int(usenet_id), "operation": operation},
+        )
+
+
+async def delete_usenet(usenet_id):
+    return await control_usenet(usenet_id, "delete")
+
+
 # ───────────────────────── הורדות ישירות (WebDL/Debrid) ─────────────────────────
 async def create_webdl(link: str):
     """מוסיף קישור Debrid (למשל Rapidgator) להורדה ב-TorBox."""
@@ -384,7 +463,7 @@ async def delete_webdl(webdl_id):
 
 async def queued_list(qtype: str = "torrent"):
     """קבלת הורדות שממתינות בתור (Queued)."""
-    params = {"type": qtype, "bypassCache": "true"}
+    params = {"type": qtype, "bypass_cache": "true"}
     async with aiohttp.ClientSession() as session:
         return await _get(session, "/queued/getqueued", params=params)
 

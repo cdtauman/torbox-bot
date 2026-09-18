@@ -34,7 +34,8 @@ async def init_db():
                 torbox_id   INTEGER,
                 hash        TEXT,
                 created_at  INTEGER,
-                notified    INTEGER DEFAULT 0
+                notified    INTEGER DEFAULT 0,
+                item_type   TEXT DEFAULT 'torrent'
             )
         """)
         await db.execute("""
@@ -65,6 +66,12 @@ async def init_db():
         # Migrations
         try:
             await db.execute("ALTER TABLE downloads ADD COLUMN notified INTEGER DEFAULT 0")
+            await db.commit()
+        except Exception:
+            pass
+
+        try:
+            await db.execute("ALTER TABLE downloads ADD COLUMN item_type TEXT DEFAULT 'torrent'")
             await db.commit()
         except Exception:
             pass
@@ -173,12 +180,20 @@ async def log_search(user_id: int, query: str, results: int):
         await db.commit()
 
 
-async def log_download(user_id: int, name: str, size: int, torbox_id, thash: str):
+async def log_download(
+    user_id: int,
+    name: str,
+    size: int,
+    torbox_id,
+    thash: str,
+    item_type: str = "torrent",
+):
+    item_type = item_type if item_type in ("torrent", "usenet", "webdl") else "torrent"
     async with aiosqlite.connect(config.DB_PATH) as db:
         await db.execute("""
-            INSERT INTO downloads (user_id, name, size, torbox_id, hash, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (user_id, name, size, torbox_id, thash, int(time.time())))
+            INSERT INTO downloads (user_id, name, size, torbox_id, hash, created_at, item_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, name, size, torbox_id, thash, int(time.time()), item_type))
         await db.commit()
 
 
@@ -201,20 +216,39 @@ async def mark_download_as_notified(download_id: int):
         await db.commit()
 
 
-async def mark_download_by_torbox_id_as_notified(torbox_id, user_id: int):
-    """מסמן הורדה ככזו שנשלחה עבורה התראה לפי ה-torbox_id ומזהה המשתמש."""
+async def mark_download_by_torbox_id_as_notified(
+    torbox_id,
+    user_id: int,
+    item_type: str | None = None,
+):
+    """מסמן הורדה כנודעת, עם סוג מקור כדי למנוע התנגשות בין מזהים."""
     async with aiosqlite.connect(config.DB_PATH) as db:
-        await db.execute("UPDATE downloads SET notified=1 WHERE torbox_id=? AND user_id=?", (torbox_id, user_id))
+        if item_type in ("torrent", "usenet", "webdl"):
+            await db.execute(
+                "UPDATE downloads SET notified=1 WHERE torbox_id=? AND user_id=? AND item_type=?",
+                (torbox_id, user_id, item_type),
+            )
+        else:
+            await db.execute(
+                "UPDATE downloads SET notified=1 WHERE torbox_id=? AND user_id=?",
+                (torbox_id, user_id),
+            )
         await db.commit()
 
 
-async def is_download_logged(user_id: int, torbox_id) -> bool:
-    """בודק אם כבר קיימת רשומה פעילה (שטרם עודכנה לגביה התראה) עבור משתמש זה והורדה זו."""
+async def is_download_logged(user_id: int, torbox_id, item_type: str | None = None) -> bool:
+    """בודק אם כבר קיימת רשומת הורדה פעילה לאותו משתמש/מזהה/סוג."""
     async with aiosqlite.connect(config.DB_PATH) as db:
-        async with db.execute(
-            "SELECT 1 FROM downloads WHERE user_id=? AND torbox_id=? AND notified=0",
-            (user_id, torbox_id)
-        ) as cur:
+        if item_type in ("torrent", "usenet", "webdl"):
+            query = (
+                "SELECT 1 FROM downloads "
+                "WHERE user_id=? AND torbox_id=? AND item_type=? AND notified=0"
+            )
+            args = (user_id, torbox_id, item_type)
+        else:
+            query = "SELECT 1 FROM downloads WHERE user_id=? AND torbox_id=? AND notified=0"
+            args = (user_id, torbox_id)
+        async with db.execute(query, args) as cur:
             return bool(await cur.fetchone())
 
 
@@ -228,7 +262,7 @@ async def get_or_create_public_link(
     file_id=None,
 ) -> str:
     """יוצר token ציבורי קבוע להורדה, או מחזיר token קיים לאותו פריט."""
-    item_type = "webdl" if item_type == "webdl" else "torrent"
+    item_type = item_type if item_type in ("torrent", "usenet", "webdl") else "torrent"
     torbox_id = str(torbox_id)
     file_id = "" if file_id is None else str(file_id)
     now = int(time.time())
@@ -294,7 +328,7 @@ async def record_public_link_access(token: str):
 
 async def disable_public_links_for_item(item_type: str, torbox_id):
     """מבטל קישורים ציבוריים לפריט שנמחק ידנית."""
-    item_type = "webdl" if item_type == "webdl" else "torrent"
+    item_type = item_type if item_type in ("torrent", "usenet", "webdl") else "torrent"
     async with aiosqlite.connect(config.DB_PATH) as db:
         await db.execute(
             "UPDATE public_links SET active=0 WHERE item_type=? AND torbox_id=?",

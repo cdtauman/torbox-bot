@@ -17,32 +17,44 @@ def _to_int(v, default=0):
 
 
 def normalize(raw: dict) -> dict:
-    """ממיר תוצאה גולמית מ-TorBox למבנה אחיד שהבוט מבין."""
+    """ממיר תוצאה גולמית מכל מקור למבנה אחיד שהבוט מבין."""
     name = raw.get("title") or raw.get("name") or raw.get("raw_title") or "ללא שם"
     size = _to_int(raw.get("size") or raw.get("filesize") or 0)
 
     seeders = _to_int(raw.get("seeders") or raw.get("seeds") or raw.get("last_known_seeders") or 0)
     leechers = _to_int(raw.get("peers") or raw.get("leechers") or raw.get("last_known_peers") or 0)
 
+    is_webdl = bool(raw.get("is_webdl"))
+    result_type = str(raw.get("result_type") or raw.get("protocol") or "").lower()
+    if is_webdl:
+        result_type = "webdl"
+    elif result_type not in ("torrent", "usenet"):
+        result_type = "torrent"
+
     thash = (raw.get("hash") or raw.get("info_hash") or "").lower()
     magnet = raw.get("magnet") or raw.get("magnet_link") or raw.get("magnetUrl") or ""
-    torrent_url = raw.get("torrent_url") or raw.get("download_url") or raw.get("downloadUrl") or ""
+    torrent_url = raw.get("torrent_url") or (raw.get("download_url") if result_type == "torrent" else "") or ""
+    nzb_url = raw.get("nzb_url") or (raw.get("download_url") if result_type == "usenet" else "") or ""
 
-    if magnet and not magnet.startswith("magnet:"):
+    if result_type == "torrent" and magnet and not magnet.startswith("magnet:"):
         if not torrent_url:
             torrent_url = magnet
         magnet = ""
 
     generated_magnet = False
-    if not thash and magnet:
-        m = re.search(r"(?i)urn:btih:([a-z0-9]{32,40})", magnet)
-        if m:
-            thash = m.group(1).lower()
-    if not magnet and thash:
-        magnet = f"magnet:?xt=urn:btih:{thash}"
-        generated_magnet = True
+    if result_type == "torrent":
+        if not thash and magnet:
+            m = re.search(r"(?i)urn:btih:([a-z0-9]{32,40})", magnet)
+            if m:
+                thash = m.group(1).lower()
+        if not magnet and thash:
+            magnet = f"magnet:?xt=urn:btih:{thash}"
+            generated_magnet = True
+    else:
+        magnet = ""
+        generated_magnet = False
 
-    cached = bool(raw.get("cached") or raw.get("is_cached") or raw.get("nzb"))
+    cached = bool(raw.get("cached") or raw.get("is_cached"))
     owned = bool(raw.get("owned") or raw.get("is_owned"))
 
     age = raw.get("age") or raw.get("pubDate") or raw.get("published") or ""
@@ -51,6 +63,9 @@ def normalize(raw: dict) -> dict:
     return {
         "name": name,
         "source": raw.get("source") or "",
+        "result_type": result_type,
+        "is_usenet": result_type == "usenet",
+        "is_webdl": result_type == "webdl",
         "size": size,
         "seeders": seeders,
         "leechers": leechers,
@@ -58,6 +73,7 @@ def normalize(raw: dict) -> dict:
         "magnet": magnet,
         "generated_magnet": generated_magnet,
         "torrent_url": torrent_url,
+        "nzb_url": nzb_url,
         "cached": cached,
         "owned": owned,
         "age": str(age),
@@ -65,7 +81,6 @@ def normalize(raw: dict) -> dict:
         "quality": detect_quality(name),
         "category": detect_category(name),
         "language": detect_language(name),
-        "is_webdl": bool(raw.get("is_webdl")),
     }
 
 
@@ -153,6 +168,10 @@ def apply_filters(results, settings, extra=None):
         # שפה
         if f.get("language", "all") != "all" and r["language"] not in (f["language"], "all"):
             continue
+        # מקור: Torrent / Usenet / WebDL
+        source_type = f.get("source_type", "all")
+        if source_type != "all" and r.get("result_type", "torrent") != source_type:
+            continue
         out.append(r)
     return out
 
@@ -160,10 +179,19 @@ def apply_filters(results, settings, extra=None):
 # ───────────────────────── מיון ─────────────────────────
 def apply_sort(results, sort_by="seeders", desc=True):
     keymap = {
-        "seeders": lambda r: r["seeders"],
+        # Usenet אינו תלוי ב-seeders, לכן במיון ברירת המחדל הוא לא נענש ב-0 seeds.
+        "seeders": lambda r: (
+            bool(r.get("cached")),
+            r.get("result_type") == "usenet",
+            r.get("seeders", 0),
+        ),
         "size": lambda r: r["size"],
         "age": lambda r: r["age"],
-        "cached": lambda r: (r["cached"], r["seeders"]),
+        "cached": lambda r: (
+            bool(r.get("cached")),
+            r.get("result_type") == "usenet",
+            r.get("seeders", 0),
+        ),
     }
     key = keymap.get(sort_by, keymap["seeders"])
     try:

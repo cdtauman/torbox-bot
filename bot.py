@@ -109,7 +109,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "🔍 חיפוש":
         await search.prompt_search(update, context)
         return
-    elif text == "📥 חיפוש והורדה ישירה (Debrid)":
+    elif text == "🔗 קישור ישיר":
         await menu.show_debrid_menu(update, context)
         return
     elif text == "📡 ההורדות שלי":
@@ -272,7 +272,7 @@ async def post_init(application: Application):
     # רישום תפריט הפקודות בטלגרם
     commands = [
         BotCommand("start", "תפריט ראשי"),
-        BotCommand("search", "חיפוש טורנטים"),
+        BotCommand("search", "חיפוש Torrent + Usenet"),
         BotCommand("downloads", "ההורדות שלי"),
         BotCommand("settings", "הגדרות"),
         BotCommand("help", "עזרה"),
@@ -319,9 +319,11 @@ def main():
     app.add_handler(CommandHandler("admin", admin.show_admin))
     app.add_handler(CommandHandler("cancel", cmd_cancel))
 
-    # קבצי torrent
+    # קבצי Torrent / NZB
     app.add_handler(MessageHandler(filters.Document.FileExtension("torrent"),
                                    download.handle_torrent_file))
+    app.add_handler(MessageHandler(filters.Document.FileExtension("nzb"),
+                                   download.handle_nzb_file))
 
     # כפתורים
     app.add_handler(CallbackQueryHandler(callback_router))

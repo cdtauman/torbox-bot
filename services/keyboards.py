@@ -17,17 +17,17 @@ def main_menu(is_admin=False):
 
 def persistent_menu():
     keyboard = [
-        [KeyboardButton("🔍 חיפוש"), KeyboardButton("📥 חיפוש והורדה ישירה (Debrid)")],
+        [KeyboardButton("🔍 חיפוש")],
         [KeyboardButton("📡 ההורדות שלי"), KeyboardButton("⚙️ הגדרות")],
-        [KeyboardButton("ℹ️ עזרה")]
+        [KeyboardButton("🔗 קישור ישיר"), KeyboardButton("ℹ️ עזרה")],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
 
 def debrid_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔍 חיפוש לפי שם (נסיוני)", callback_data="debrid:search")],
-        [InlineKeyboardButton("🔗 המרת קישור", callback_data="debrid:convert")],
-        [InlineKeyboardButton("🏠 ראשי", callback_data="menu:home")]
+        [InlineKeyboardButton("🔗 הוסף קישור נתמך", callback_data="debrid:convert")],
+        [InlineKeyboardButton("🔍 חיפוש WebDL (ניסיוני)", callback_data="debrid:search")],
+        [InlineKeyboardButton("🏠 ראשי", callback_data="menu:home")],
     ])
 
 
@@ -129,6 +129,17 @@ def filter_menu(temp):
             rows.append(crow); crow = []
     if crow:
         rows.append(crow)
+
+    rows.append([InlineKeyboardButton("— 🌐 מקור —", callback_data="noop")])
+    source_value = temp.get("source_type", "all")
+    rows.append([
+        InlineKeyboardButton("הכל" + (" ✅" if source_value == "all" else ""), callback_data="setf:source_type:all"),
+        InlineKeyboardButton("🧲 Torrent" + (" ✅" if source_value == "torrent" else ""), callback_data="setf:source_type:torrent"),
+    ])
+    rows.append([
+        InlineKeyboardButton("📰 Usenet" + (" ✅" if source_value == "usenet" else ""), callback_data="setf:source_type:usenet"),
+        InlineKeyboardButton("🔗 WebDL" + (" ✅" if source_value == "webdl" else ""), callback_data="setf:source_type:webdl"),
+    ])
 
     cached_on = temp.get("cached_only", 0)
     rows.append([InlineKeyboardButton("— ⚡ זמינות —", callback_data="noop")])
