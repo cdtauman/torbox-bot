@@ -1,5 +1,6 @@
 import unittest
 
+import config
 from services import prowlarr_api
 
 
@@ -9,6 +10,26 @@ class ProwlarrMappingTests(unittest.TestCase):
         self.assertEqual(prowlarr_api._protocol({"protocol": 1}), "usenet")
         self.assertEqual(prowlarr_api._protocol({"protocol": "torrent"}), "torrent")
         self.assertEqual(prowlarr_api._protocol({"protocol": 2}), "torrent")
+
+    def test_absolute_url_uses_configured_prowlarr_origin(self):
+        old_url = config.PROWLARR_URL
+        config.PROWLARR_URL = "http://prowlarr:9696"
+        try:
+            value = prowlarr_api._absolute_url(
+                "http://127.0.0.1:9696/download?id=123"
+            )
+            self.assertEqual(value, "http://prowlarr:9696/download?id=123")
+        finally:
+            config.PROWLARR_URL = old_url
+
+    def test_absolute_url_rejects_external_host(self):
+        old_url = config.PROWLARR_URL
+        config.PROWLARR_URL = "http://prowlarr:9696"
+        try:
+            with self.assertRaises(prowlarr_api.ProwlarrError):
+                prowlarr_api._absolute_url("https://example.com/download/123")
+        finally:
+            config.PROWLARR_URL = old_url
 
     def test_usenet_release_maps_to_nzb(self):
         mapped = prowlarr_api._map_release({
