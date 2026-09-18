@@ -56,12 +56,6 @@ def classify_text(text: str) -> InputIntent:
 
 
 def safe_log_summary(text: str) -> str:
-    """תיאור קלט ללוג בלי לשמור URL, Magnet, hash או שאילתת חיפוש."""
+    """תיאור קלט ללוג בלי לשמור את תוכן הקלט או היעד."""
     intent = classify_text(text)
-    if intent.kind in ("url", "nzb_url"):
-        try:
-            host = urlsplit(intent.value).hostname or "?"
-        except ValueError:
-            host = "?"
-        return f"kind={intent.kind} host={host} len={len(intent.value)}"
     return f"kind={intent.kind} len={len(intent.value)}"
