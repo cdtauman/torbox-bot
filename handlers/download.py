@@ -178,6 +178,56 @@ async def handle_magnet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _try_send_direct_link(update.message, torbox_id, update.effective_user.id)
 
 
+# ───────────────────────── info-hash ישיר ─────────────────────────
+@require_role(config.ROLE_USER)
+async def handle_torrent_hash(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    thash: str | None = None,
+):
+    """מוסיף info-hash שהודבק כטקסט בלי לדרוש מהמשתמש לבנות magnet."""
+    thash = (thash or (update.message.text or "")).strip().lower()
+    status = await update.message.reply_text("🧲 זיהיתי Torrent hash — מוסיף ל-TorBox...")
+    try:
+        data = await torbox_api.add_hash(thash)
+    except Exception as e:
+        if "already queued" in str(e).lower():
+            handled = await _handle_already_queued(
+                update.effective_user.id,
+                "Torrent",
+                thash,
+                is_webdl=False,
+                status_msg=status,
+            )
+            if handled:
+                return
+        await status.edit_text(f"⚠️ שגיאה: {e}")
+        return
+
+    torbox_id = (data or {}).get("torrent_id") or (data or {}).get("id")
+    name = (data or {}).get("name") or "Torrent"
+    item_hash = (data or {}).get("hash") or (data or {}).get("info_hash") or thash
+    await db.log_download(
+        update.effective_user.id,
+        name,
+        0,
+        torbox_id,
+        item_hash,
+        item_type="torrent",
+    )
+    await status.edit_text(
+        f"✅ נוסף בהצלחה!\n📋 {fmt.escape(name[:60])}\n\n"
+        "עקוב ב'ההורדות שלי' 📡",
+        parse_mode="HTML",
+    )
+    if torbox_id:
+        await _try_send_direct_link(
+            update.message,
+            torbox_id,
+            update.effective_user.id,
+        )
+
+
 # ───────────────────────── קובץ .torrent ─────────────────────────
 @require_role(config.ROLE_USER)
 async def handle_torrent_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -196,7 +246,11 @@ async def handle_torrent_file(update: Update, context: ContextTypes.DEFAULT_TYPE
         await tg_file.download_to_drive(path)
 
         with open(path, "rb") as f:
-            data = await torbox_api.add_torrent_file(safe_filename, f.read())
+            content = f.read()
+        if not content.startswith(b"d") or b"4:info" not in content:
+            await status.edit_text("⚠️ הקובץ לא נראה כמו קובץ .torrent תקין.")
+            return
+        data = await torbox_api.add_torrent_file(safe_filename, content)
         torbox_id = (data or {}).get("torrent_id") or (data or {}).get("id")
         name = (data or {}).get("name") or safe_filename
         item_hash = (data or {}).get("hash") or (data or {}).get("info_hash") or ""
@@ -243,7 +297,12 @@ async def handle_nzb_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         path = os.path.join(tempfile.gettempdir(), f"{uuid.uuid4()}_{safe_filename}")
         await tg_file.download_to_drive(path)
         with open(path, "rb") as fh:
-            data = await torbox_api.add_nzb_file(safe_filename, fh.read())
+            content = fh.read()
+        preview = content[:4096].lower()
+        if b"<nzb" not in preview:
+            await status.edit_text("⚠️ הקובץ לא נראה כמו קובץ NZB תקין.")
+            return
+        data = await torbox_api.add_nzb_file(safe_filename, content)
 
         torbox_id = (data or {}).get("usenetdownload_id") or (data or {}).get("usenet_id") or (data or {}).get("id")
         item_hash = (data or {}).get("hash") or ""
@@ -278,64 +337,110 @@ async def handle_nzb_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
 
 
-# ───────────────────────── הורדה ישירה (Debrid) ─────────────────────────
+# ───────────────────────── קישור ישיר / URL חכם ─────────────────────────
 @require_role(config.ROLE_USER)
-async def handle_debrid_convert(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    link = update.message.text.strip()
+async def handle_direct_url(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    link: str | None = None,
+    as_usenet: bool = False,
+):
+    """מטפל ב-URL שהודבק ישירות: NZB ל-Usenet, וכל URL אחר ל-WebDL."""
+    from urllib.parse import urlparse
     from handlers.menu import clear_user_states
+
     clear_user_states(context)
-    
-    logger.info(f"[DEBRID CONVERT] User {update.effective_user.id} requested conversion of link: {link[:60]}...")
-    status = await update.message.reply_text("📥 ממיר את הקישור ב-TorBox...")
+    link = (link or update.message.text or "").strip()
+    user_id = update.effective_user.id
+    item_type = "usenet" if as_usenet else "webdl"
+
+    if as_usenet:
+        status = await update.message.reply_text("📰 זיהיתי קישור NZB — מוסיף ל-Usenet...")
+    else:
+        status = await update.message.reply_text("🔗 זיהיתי קישור — שולח ל-TorBox...")
+
     try:
-        logger.debug("[DEBRID CONVERT] Calling torbox_api.create_webdl...")
-        data = await torbox_api.create_webdl(link)
-        logger.debug(f"[DEBRID CONVERT] create_webdl returned successfully: {data}")
+        if as_usenet:
+            name_hint = os.path.basename(urlparse(link).path) or "download.nzb"
+            data = await torbox_api.add_nzb_url(link, name=name_hint)
+        else:
+            data = await torbox_api.create_webdl(link)
     except torbox_api.TorBoxError as e:
         err_msg = str(e)
-        if "already queued" in err_msg.lower():
-            import urllib.parse
-            path_part = urllib.parse.urlparse(link).path
-            name_fallback = os.path.basename(path_part)
-            handled = await _handle_already_queued(update.effective_user.id, name_fallback, "", is_webdl=True, status_msg=status)
+        if not as_usenet and "already queued" in err_msg.lower():
+            name_fallback = os.path.basename(urlparse(link).path)
+            handled = await _handle_already_queued(
+                user_id,
+                name_fallback,
+                "",
+                is_webdl=True,
+                status_msg=status,
+            )
             if handled:
                 return
-        if "cannot be downloaded" in err_msg.lower() or "not supported" in err_msg.lower():
-            err_msg += "\n\nייתכן שה-Hoster כרגע לא זמין ב-TorBox.\nבדוק ב: https://torbox.app/hosters"
-        logger.error(f"[DEBRID CONVERT] TorBox error: {e}")
-        await status.edit_text(f"⚠️ {err_msg}", disable_web_page_preview=True)
+        if not as_usenet and (
+            "cannot be downloaded" in err_msg.lower()
+            or "not supported" in err_msg.lower()
+        ):
+            err_msg += (
+                "\n\nTorBox צריך קישור ישיר לקובץ; "
+                "עמוד אינטרנט או קישור שמבצע redirect עלולים לא לעבוד."
+            )
+        logger.warning(
+            "[DIRECT URL] TorBox rejected type=%s error=%s",
+            item_type,
+            type(e).__name__,
+        )
+        await status.edit_text(
+            f"⚠️ {err_msg}",
+            disable_web_page_preview=True,
+        )
         return
     except Exception as e:
-        err_msg = str(e)
-        if "already queued" in err_msg.lower():
-            import urllib.parse
-            path_part = urllib.parse.urlparse(link).path
-            name_fallback = os.path.basename(path_part)
-            handled = await _handle_already_queued(update.effective_user.id, name_fallback, "", is_webdl=True, status_msg=status)
-            if handled:
-                return
-        logger.error(f"[DEBRID CONVERT] Error during conversion: {e}")
+        logger.exception("[DIRECT URL] Failed type=%s", item_type)
         await status.edit_text(f"⚠️ שגיאה: {e}")
         return
-        
-    torbox_id = (data or {}).get("webdownload_id") or (data or {}).get("data", {}).get("webdownload_id")
-    name = (data or {}).get("name") or (data or {}).get("data", {}).get("name") or "WebDL Download"
-    logger.info(f"[DEBRID CONVERT] Success: torbox_id={torbox_id} | name={name} | raw_data={data}")
+
+    if as_usenet:
+        torbox_id = (
+            (data or {}).get("usenetdownload_id")
+            or (data or {}).get("usenet_id")
+            or (data or {}).get("id")
+        )
+        name = (data or {}).get("name") or os.path.basename(urlparse(link).path) or "NZB"
+    else:
+        torbox_id = (data or {}).get("webdownload_id") or (data or {}).get("id")
+        name = (data or {}).get("name") or os.path.basename(urlparse(link).path) or "הורדה ישירה"
+
     await db.log_download(
-        update.effective_user.id,
+        user_id,
         name,
         0,
         torbox_id,
         "",
-        item_type="webdl",
+        item_type=item_type,
     )
     await status.edit_text(
-        f"✅ נוסף בהצלחה להורדות ישירות!\n📋 {fmt.escape(name[:60])}\n\n"
-        f"עקוב ב'ההורדות שלי' 📡",
-        parse_mode="HTML")
+        f"✅ נוסף בהצלחה!\n📋 {fmt.escape(name[:60])}\n\n"
+        "עקוב ב'ההורדות שלי' 📡",
+        parse_mode="HTML",
+    )
 
     if torbox_id:
-        await _try_send_direct_link(update.message, torbox_id, update.effective_user.id, is_webdl=True)
+        await _try_send_direct_link(
+            update.message,
+            torbox_id,
+            user_id,
+            is_webdl=not as_usenet,
+            is_usenet=as_usenet,
+        )
+
+
+@require_role(config.ROLE_USER)
+async def handle_debrid_convert(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """תאימות לכפתור הישן; כיום URL רגיל מזוהה אוטומטית."""
+    await handle_direct_url(update, context)
+
 
 async def _try_send_direct_link(message, torbox_id, user_id, is_webdl=False, is_usenet=False):
     # TorBox may need a few seconds before a just-added item can return a direct link.
@@ -414,7 +519,13 @@ def parse_magnet_info(magnet: str):
 
 
 async def _handle_already_queued(user_id, name: str, thash: str, is_webdl: bool = False, status_msg = None, reply_to_message = None):
-    logger.info(f"[ALREADY_QUEUED] Handling already queued for user={user_id} | name={name!r} | hash={thash!r} | is_webdl={is_webdl}")
+    logger.info(
+        "[ALREADY_QUEUED] user=%s | has_name=%s | has_hash=%s | is_webdl=%s",
+        user_id,
+        bool(name),
+        bool(thash),
+        is_webdl,
+    )
     try:
         if is_webdl:
             active_items = await torbox_api.webdl_list()
@@ -446,7 +557,7 @@ async def _handle_already_queued(user_id, name: str, thash: str, is_webdl: bool 
     found_item = None
     if thash:
         clean_hash = thash.lower().strip()
-        logger.info(f"[ALREADY_QUEUED] Attempting match by hash: {clean_hash}")
+        logger.info("[ALREADY_QUEUED] Attempting match by hash")
         for item in items:
             item_hash = (item.get("hash") or item.get("info_hash") or "").lower().strip()
             logger.debug(f"  Comparing with item hash: {item_hash!r} (name: {item.get('name')!r})")

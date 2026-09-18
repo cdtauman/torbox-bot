@@ -1,13 +1,22 @@
 # 🔎 TorBox Telegram Bot
 
 בוט טלגרם לחיפוש מאוחד, הוספת הורדות ומעקב דרך **TorBox**.  
-הממשק מיועד להיות פשוט למשתמש: מחפשים פעם אחת, והבוט מטפל מאחורי הקלעים ב-Torrent, ב-Usenet ובקישורי WebDL נתמכים.
+הממשק בנוי סביב Smart Input: המשתמש פשוט שולח שם, URL, Magnet, info-hash, ‎.torrent או ‎.nzb, והבוט בוחר אוטומטית את המסלול המתאים.
 
 > השתמש רק במקורות ובתוכן שיש לך הרשאה לגשת אליהם.
 
 ---
 
 ## ✨ מה הבוט יודע לעשות
+
+### 🧠 Smart Input
+- טקסט רגיל → חיפוש מאוחד.
+- Magnet או info-hash → Torrent.
+- URL רגיל → WebDL דרך TorBox.
+- URL שמסתיים ב-`.nzb` → Usenet.
+- קובץ `.torrent` או `.nzb` → העלאה ישירה.
+- אין צורך לבחור מצב לפני שמדביקים משהו.
+- URL/Magnet/hash אינם נכתבים במלואם ללוגי ה-router.
 
 ### 🔍 חיפוש מאוחד
 - חיפוש אחד שממזג תוצאות מ-**Prowlarr** ומ-**TorBox Search** כאשר הם זמינים.
@@ -228,7 +237,7 @@ python -m compileall -q .
 python -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-GitHub Actions מריץ את שתי הבדיקות אוטומטית בכל PR ל-`master`.
+GitHub Actions מריץ את שתי הבדיקות אוטומטית בכל PR ל-`master` וגם אחרי push ל-`master`.
 
 ---
 

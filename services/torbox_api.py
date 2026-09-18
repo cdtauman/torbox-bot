@@ -149,7 +149,7 @@ async def _search_once(session, query: str, check_cache: bool) -> list:
     if check_cache:
         params["check_cache"] = "true"
     try:
-        logger.debug(f"[TBSEARCH] GET {url} | params={params}")
+        logger.debug("[TBSEARCH] request query_len=%s", len(query))
         async with session.get(url, params=params, headers=_headers(),
                                timeout=_SEARCH_TIMEOUT) as resp:
             try:
@@ -158,7 +158,7 @@ async def _search_once(session, query: str, check_cache: bool) -> list:
                 detail = (await resp.text())[:300] or f"HTTP {resp.status}"
                 if resp.status in (401, 403, 429):
                     raise TorBoxError(_search_error_message(resp.status, detail))
-                logger.warning(f"[TBSEARCH] query={query!r} failed: {detail}")
+                logger.warning("[TBSEARCH] search failed: %s", detail)
                 return []
             if resp.status != 200 or not body.get("success", False):
                 detail = body.get("error") or body.get("detail") or f"HTTP {resp.status}"
@@ -167,12 +167,12 @@ async def _search_once(session, query: str, check_cache: bool) -> list:
                     raise TorBoxError(_search_error_message(resp.status, detail))
                 return []
             torrents = (body.get("data") or {}).get("torrents", []) or []
-            logger.info(f"[TBSEARCH] query={query!r} → {len(torrents)} torrents")
+            logger.info("[TBSEARCH] result_count=%s", len(torrents))
             return torrents
     except TorBoxError:
         raise
     except Exception as e:
-        logger.error(f"[TBSEARCH] query={query!r} error: {type(e).__name__}: {e}")
+        logger.error("[TBSEARCH] error=%s: %s", type(e).__name__, e)
         return []
 
 
@@ -236,8 +236,12 @@ async def search(query: str, check_cache: bool = True):
     results.sort(key=lambda t: t.get("last_known_seeders") or t.get("seeders") or 0, reverse=True)
     results = results[:config.SEARCH_LIMIT]
     cached_n = sum(1 for t in results if t.get("cached"))
-    logger.info(f"[TBSEARCH] query={query!r} | variants={len(variants)} | "
-                f"merged={len(results)} | cached={cached_n}")
+    logger.info(
+        "[TBSEARCH] variants=%s | merged=%s | cached=%s",
+        len(variants),
+        len(results),
+        cached_n,
+    )
     return results
 
 

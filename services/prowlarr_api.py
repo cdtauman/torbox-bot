@@ -132,7 +132,7 @@ async def search(query: str) -> list[dict]:
 
     async with aiohttp.ClientSession(timeout=timeout) as session:
         url = _base_url("/api/v1/search")
-        logger.info("[PROWLARR] search query=%r", query)
+        logger.info("[PROWLARR] search query_len=%s", len(query))
         async with session.get(url, headers=_headers(), params=params) as resp:
             try:
                 data = await resp.json(content_type=None)
@@ -159,8 +159,7 @@ async def search(query: str) -> list[dict]:
 
     results = [_map_release(r, cached_hashes) for r in releases]
     logger.info(
-        "[PROWLARR] query=%r results=%s torrents=%s usenet=%s",
-        query,
+        "[PROWLARR] results=%s torrents=%s usenet=%s",
         len(results),
         sum(1 for r in results if r["result_type"] == "torrent"),
         sum(1 for r in results if r["result_type"] == "usenet"),

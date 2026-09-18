@@ -96,7 +96,7 @@ async def do_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
     context.user_data["search_task"] = asyncio.current_task()
-    logger.info(f"[SEARCH] START | user={user.id} | query={query!r}")
+    logger.info("[SEARCH] START | user=%s | query_len=%s", user.id, len(query))
 
     status_msg = await update.message.reply_text("🔍 מחפש ב-Torrent + Usenet...", reply_markup=kb.cancel_search_keyboard())
 
@@ -104,18 +104,18 @@ async def do_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         async with _SEARCH_SEMAPHORE:
             raw_results = await _search_provider(query)
     except asyncio.CancelledError:
-        logger.info(f"[SEARCH] CANCELLED | user={user.id} | query={query!r}")
+        logger.info("[SEARCH] CANCELLED | user=%s | query_len=%s", user.id, len(query))
         return
     except prowlarr_api.ProwlarrError as e:
-        logger.error(f"[SEARCH] ProwlarrError | user={user.id} | query={query!r} | error={e}")
+        logger.error("[SEARCH] ProwlarrError | user=%s | error=%s", user.id, e)
         await status_msg.edit_text(f"⚠️ שגיאה בחיפוש:\n{e}")
         return
     except torbox_api.TorBoxError as e:
-        logger.error(f"[SEARCH] TorBoxError | user={user.id} | query={query!r} | error={e}")
+        logger.error("[SEARCH] TorBoxError | user=%s | error=%s", user.id, e)
         await status_msg.edit_text(f"⚠️ שגיאה בחיפוש:\n{e}")
         return
     except Exception as e:
-        logger.exception(f"[SEARCH] Unexpected error | user={user.id} | query={query!r}")
+        logger.exception("[SEARCH] Unexpected error | user=%s", user.id)
         await status_msg.edit_text(f"⚠️ שגיאה לא צפויה: {e}")
         return
     finally:
@@ -124,12 +124,14 @@ async def do_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # נרמול
     results = [parser.normalize(r) for r in raw_results]
+    for result in results:
+        result["relevance"] = parser.relevance_score(result, query)
     cached_count = sum(1 for r in results if r.get("cached"))
-    logger.info(f"[SEARCH] DONE | user={user.id} | query={query!r} | total={len(results)} | cached={cached_count}")
+    logger.info("[SEARCH] DONE | user=%s | total=%s | cached=%s", user.id, len(results), cached_count)
     await db.log_search(update.effective_user.id, query, len(results))
 
     if not results:
-        logger.info(f"[SEARCH] NO RESULTS | user={user.id} | query={query!r}")
+        logger.info("[SEARCH] NO RESULTS | user=%s", user.id)
         await status_msg.edit_text(
             f"😕 לא נמצאו תוצאות עבור <b>{fmt.escape(query)}</b>.\n"
             "נסה ניסוח אחר.",
@@ -151,17 +153,17 @@ async def do_debrid_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     context.user_data["awaiting_debrid_search"] = False
     
-    logger.info(f"[DEBRID SEARCH] START | user={user.id} | query={query!r}")
+    logger.info("[DEBRID SEARCH] START | user=%s | query_len=%s", user.id, len(query))
     status_msg = await update.message.reply_text("🔍 מחפש קישורים ישירים ב-RLSBB...", reply_markup=kb.cancel_search_keyboard())
 
     try:
         raw_results = await rlsbb_api.search(query)
     except Exception as e:
-        logger.exception(f"[DEBRID SEARCH] Unexpected error | user={user.id} | query={query!r}")
+        logger.exception("[DEBRID SEARCH] Unexpected error | user=%s", user.id)
         await status_msg.edit_text(f"⚠️ שגיאה בחיפוש ב-RLSBB: {e}")
         return
 
-    logger.info(f"[DEBRID SEARCH] DONE | user={user.id} | query={query!r} | total={len(raw_results)}")
+    logger.info("[DEBRID SEARCH] DONE | user=%s | total=%s", user.id, len(raw_results))
     await db.log_search(update.effective_user.id, query + " [RLSBB]", len(raw_results))
 
     if not raw_results:
@@ -261,8 +263,7 @@ async def _search_provider(query: str):
     groups = await asyncio.gather(*tasks)
     results = _merge_results(list(groups))
     logger.info(
-        "[SEARCH] unified query=%r providers=%s total=%s",
-        query,
+        "[SEARCH] unified providers=%s total=%s",
         ",".join(labels),
         len(results),
     )
@@ -290,7 +291,13 @@ async def _render_results(message, context, page=0):
         desc=bool(temp.get("sort_desc", settings.get("sort_desc", 1))),
     )
     context.user_data["filtered"] = filtered
-    logger.debug(f"[RENDER] query={context.user_data.get('query')!r} | all={len(all_results)} | filtered={len(filtered)} | page={page} | fallback={filters_dropped_all}")
+    logger.debug(
+        "[RENDER] all=%s | filtered=%s | page=%s | fallback=%s",
+        len(all_results),
+        len(filtered),
+        page,
+        filters_dropped_all,
+    )
 
     if not filtered:
         await message.edit_text(
