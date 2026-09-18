@@ -34,7 +34,8 @@ async def init_db():
                 torbox_id   INTEGER,
                 hash        TEXT,
                 created_at  INTEGER,
-                notified    INTEGER DEFAULT 0
+                notified    INTEGER DEFAULT 0,
+                item_type   TEXT DEFAULT 'torrent'
             )
         """)
         await db.execute("""
@@ -65,6 +66,12 @@ async def init_db():
         # Migrations
         try:
             await db.execute("ALTER TABLE downloads ADD COLUMN notified INTEGER DEFAULT 0")
+            await db.commit()
+        except Exception:
+            pass
+
+        try:
+            await db.execute("ALTER TABLE downloads ADD COLUMN item_type TEXT DEFAULT 'torrent'")
             await db.commit()
         except Exception:
             pass
@@ -173,12 +180,20 @@ async def log_search(user_id: int, query: str, results: int):
         await db.commit()
 
 
-async def log_download(user_id: int, name: str, size: int, torbox_id, thash: str):
+async def log_download(
+    user_id: int,
+    name: str,
+    size: int,
+    torbox_id,
+    thash: str,
+    item_type: str = "torrent",
+):
+    item_type = item_type if item_type in ("torrent", "usenet", "webdl") else "torrent"
     async with aiosqlite.connect(config.DB_PATH) as db:
         await db.execute("""
-            INSERT INTO downloads (user_id, name, size, torbox_id, hash, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (user_id, name, size, torbox_id, thash, int(time.time())))
+            INSERT INTO downloads (user_id, name, size, torbox_id, hash, created_at, item_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, name, size, torbox_id, thash, int(time.time()), item_type))
         await db.commit()
 
 
@@ -228,7 +243,7 @@ async def get_or_create_public_link(
     file_id=None,
 ) -> str:
     """יוצר token ציבורי קבוע להורדה, או מחזיר token קיים לאותו פריט."""
-    item_type = "webdl" if item_type == "webdl" else "torrent"
+    item_type = item_type if item_type in ("torrent", "usenet", "webdl") else "torrent"
     torbox_id = str(torbox_id)
     file_id = "" if file_id is None else str(file_id)
     now = int(time.time())
