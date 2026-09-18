@@ -39,25 +39,37 @@ async def show_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         edit = update.message.reply_text
 
-    try:
-        torrents, usenet, webdls = await asyncio.gather(
-            torbox_api.my_list(),
-            torbox_api.usenet_list(),
-            torbox_api.webdl_list(),
-        )
-    except Exception as e:
-        await edit(f"⚠️ שגיאה בטעינת ההורדות: {e}", reply_markup=kb.back_home())
-        return
+    log = logging.getLogger(__name__)
 
-    try:
-        queued_torrents, queued_usenet, queued_webdls = await asyncio.gather(
-            torbox_api.queued_list("torrent"),
-            torbox_api.queued_list("usenet"),
-            torbox_api.queued_list("webdl"),
-        )
-    except Exception as e:
-        logging.getLogger(__name__).warning("Failed to fetch queued downloads: %s", e)
-        queued_torrents, queued_usenet, queued_webdls = [], [], []
+    active_results = await asyncio.gather(
+        torbox_api.my_list(),
+        torbox_api.usenet_list(),
+        torbox_api.webdl_list(),
+        return_exceptions=True,
+    )
+    queued_results = await asyncio.gather(
+        torbox_api.queued_list("torrent"),
+        torbox_api.queued_list("usenet"),
+        torbox_api.queued_list("webdl"),
+        return_exceptions=True,
+    )
+
+    def _value_or_empty(value, label):
+        if isinstance(value, Exception):
+            log.warning("Failed to fetch %s: %s", label, value)
+            return []
+        return value
+
+    torrents, usenet, webdls = (
+        _value_or_empty(active_results[0], "torrents"),
+        _value_or_empty(active_results[1], "usenet"),
+        _value_or_empty(active_results[2], "webdl"),
+    )
+    queued_torrents, queued_usenet, queued_webdls = (
+        _value_or_empty(queued_results[0], "queued torrents"),
+        _value_or_empty(queued_results[1], "queued usenet"),
+        _value_or_empty(queued_results[2], "queued webdl"),
+    )
 
     def _as_list(value):
         if isinstance(value, dict):
