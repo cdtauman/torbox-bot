@@ -124,6 +124,8 @@ async def do_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # נרמול
     results = [parser.normalize(r) for r in raw_results]
+    for result in results:
+        result["relevance"] = parser.relevance_score(result, query)
     cached_count = sum(1 for r in results if r.get("cached"))
     logger.info(f"[SEARCH] DONE | user={user.id} | query={query!r} | total={len(results)} | cached={cached_count}")
     await db.log_search(update.effective_user.id, query, len(results))
