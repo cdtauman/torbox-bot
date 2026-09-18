@@ -69,5 +69,21 @@ class ParserTests(unittest.TestCase):
 
 
 
+    def test_relevance_supports_hebrew(self):
+        query = "סרט לדוגמה 2026"
+        exact = parser.normalize({
+            "title": "סרט לדוגמה 2026 1080p",
+            "result_type": "torrent",
+        })
+        other = parser.normalize({
+            "title": "סרט אחר לגמרי 2026",
+            "result_type": "torrent",
+        })
+        self.assertGreater(
+            parser.relevance_score(exact, query),
+            parser.relevance_score(other, query),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
