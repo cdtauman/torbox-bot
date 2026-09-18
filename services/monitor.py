@@ -50,9 +50,17 @@ async def start_monitoring(application):
 
 
 def _as_list(value):
+    if isinstance(value, Exception):
+        return []
     if isinstance(value, dict):
         return [value]
     return value or []
+
+
+def _log_api_errors(values, labels, prefix):
+    for value, label in zip(values, labels):
+        if isinstance(value, Exception):
+            logger.warning("[%s] Failed to fetch %s: %s", prefix, label, value)
 
 
 def _item_id(item: dict, item_type: str) -> str:
@@ -93,15 +101,18 @@ async def check_downloads_status(application):
     if not unnotified:
         return
 
-    try:
-        torrents, usenet, webdls = await asyncio.gather(
-            torbox_api.my_list(),
-            torbox_api.usenet_list(),
-            torbox_api.webdl_list(),
-        )
-    except Exception as e:
-        logger.warning("[MONITOR] Failed to fetch TorBox download lists: %s", e)
-        return
+    active_results = await asyncio.gather(
+        torbox_api.my_list(),
+        torbox_api.usenet_list(),
+        torbox_api.webdl_list(),
+        return_exceptions=True,
+    )
+    _log_api_errors(
+        active_results,
+        ("torrents", "usenet", "webdl"),
+        "MONITOR",
+    )
+    torrents, usenet, webdls = active_results
 
     items_by_type = {
         "torrent": _as_list(torrents),
@@ -135,6 +146,17 @@ async def check_downloads_status(application):
                 item = torrent_by_hash.get(thash)
                 if item:
                     tid = _item_id(item, "torrent")
+
+        # רשומות ישנות מלפני migration סומנו כברירת מחדל כ-torrent.
+        # אם אותו ID קיים בדיוק בסוג אחד אחר, אפשר לשחזר את הסוג בלי לנחש.
+        if not item and tid:
+            id_matches = [
+                (candidate_type, candidate_item)
+                for (candidate_type, candidate_id), candidate_item in by_type_and_id.items()
+                if candidate_id == tid
+            ]
+            if len(id_matches) == 1:
+                item_type, item = id_matches[0]
 
         if not item or not _is_finished(item):
             continue
@@ -247,20 +269,31 @@ async def check_and_clean_old_torrents():
     שומר תאימות לשם הישן, אבל מטפל כיום בכל סוגי ההורדות:
     Torrent, Usenet ו-WebDL.
     """
-    try:
-        queued_torrents, queued_usenet, queued_webdls = await asyncio.gather(
-            torbox_api.queued_list("torrent"),
-            torbox_api.queued_list("usenet"),
-            torbox_api.queued_list("webdl"),
-        )
-        torrents, usenet, webdls = await asyncio.gather(
-            torbox_api.my_list(),
-            torbox_api.usenet_list(),
-            torbox_api.webdl_list(),
-        )
-    except Exception as e:
-        logger.warning("[CLEANUP] Failed to fetch TorBox items: %s", e)
-        return
+    queued_results = await asyncio.gather(
+        torbox_api.queued_list("torrent"),
+        torbox_api.queued_list("usenet"),
+        torbox_api.queued_list("webdl"),
+        return_exceptions=True,
+    )
+    active_results = await asyncio.gather(
+        torbox_api.my_list(),
+        torbox_api.usenet_list(),
+        torbox_api.webdl_list(),
+        return_exceptions=True,
+    )
+    _log_api_errors(
+        queued_results,
+        ("queued torrents", "queued usenet", "queued webdl"),
+        "CLEANUP",
+    )
+    _log_api_errors(
+        active_results,
+        ("torrents", "usenet", "webdl"),
+        "CLEANUP",
+    )
+
+    queued_torrents, queued_usenet, queued_webdls = queued_results
+    torrents, usenet, webdls = active_results
 
     queued_by_type = {
         "torrent": _as_list(queued_torrents),
