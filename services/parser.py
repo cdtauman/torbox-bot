@@ -179,7 +179,7 @@ def apply_filters(results, settings, extra=None):
 def relevance_score(result: dict, query: str) -> float:
     """ציון התאמה גנרי בין שאילתת המשתמש לשם התוצאה."""
     def norm(value: str) -> str:
-        return " ".join(re.findall(r"[a-z0-9]+", (value or "").lower()))
+        return " ".join(re.findall(r"[^\W_]+", (value or "").lower(), flags=re.UNICODE))
 
     q = norm(query)
     name = norm(result.get("name", ""))
