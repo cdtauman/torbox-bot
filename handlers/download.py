@@ -247,7 +247,7 @@ async def handle_torrent_file(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         with open(path, "rb") as f:
             content = f.read()
-        if not content.startswith(b"d") or b"4:info" not in content[:65536]:
+        if not content.startswith(b"d") or b"4:info" not in content:
             await status.edit_text("⚠️ הקובץ לא נראה כמו קובץ .torrent תקין.")
             return
         data = await torbox_api.add_torrent_file(safe_filename, content)
@@ -299,7 +299,7 @@ async def handle_nzb_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with open(path, "rb") as fh:
             content = fh.read()
         preview = content[:4096].lower()
-        if b"<nzb" not in preview and b"<?xml" not in preview:
+        if b"<nzb" not in preview:
             await status.edit_text("⚠️ הקובץ לא נראה כמו קובץ NZB תקין.")
             return
         data = await torbox_api.add_nzb_file(safe_filename, content)
@@ -386,7 +386,11 @@ async def handle_direct_url(
                 "\n\nTorBox צריך קישור ישיר לקובץ; "
                 "עמוד אינטרנט או קישור שמבצע redirect עלולים לא לעבוד."
             )
-        logger.warning("[DIRECT URL] TorBox rejected type=%s: %s", item_type, e)
+        logger.warning(
+            "[DIRECT URL] TorBox rejected type=%s error=%s",
+            item_type,
+            type(e).__name__,
+        )
         await status.edit_text(
             f"⚠️ {err_msg}",
             disable_web_page_preview=True,
