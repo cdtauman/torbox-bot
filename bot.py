@@ -50,7 +50,12 @@ async def log_all_updates(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 input_router.safe_log_summary(msg.text),
             )
         elif msg.document:
-            logger.info(f"[DOC] user={uid} ({uname}) | file={msg.document.file_name!r} size={msg.document.file_size}")
+            logger.info(
+                "[DOC] user=%s (%s) | size=%s",
+                uid,
+                uname,
+                msg.document.file_size,
+            )
         elif msg.photo:
             logger.info(f"[PHOTO] user={uid} ({uname}) | photo received")
         elif msg.sticker:
