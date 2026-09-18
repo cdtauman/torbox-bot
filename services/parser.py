@@ -176,10 +176,45 @@ def apply_filters(results, settings, extra=None):
     return out
 
 
+def relevance_score(result: dict, query: str) -> float:
+    """ציון התאמה גנרי בין שאילתת המשתמש לשם התוצאה."""
+    def norm(value: str) -> str:
+        return " ".join(re.findall(r"[a-z0-9]+", (value or "").lower()))
+
+    q = norm(query)
+    name = norm(result.get("name", ""))
+    if not q or not name:
+        return 0.0
+
+    q_tokens = q.split()
+    name_tokens = set(name.split())
+    matched = sum(1 for token in q_tokens if token in name_tokens)
+    coverage = matched / max(1, len(q_tokens))
+
+    score = coverage * 100
+    if q == name:
+        score += 80
+    elif q in name:
+        score += 45
+
+    # מספרים כמו שנה, עונה ופרק חשובים במיוחד להתאמה מדויקת.
+    numeric_tokens = [token for token in q_tokens if any(ch.isdigit() for ch in token)]
+    if numeric_tokens:
+        score += 12 * sum(1 for token in numeric_tokens if token in name_tokens)
+
+    # זמינות היא tie-breaker בלבד; רלוונטיות נשארת הגורם המרכזי.
+    if result.get("cached"):
+        score += 4
+    if result.get("result_type") == "torrent":
+        score += min(result.get("seeders", 0), 1000) / 1000
+    return score
+
+
 # ───────────────────────── מיון ─────────────────────────
 def apply_sort(results, sort_by="seeders", desc=True):
     keymap = {
-        # Usenet אינו תלוי ב-seeders, לכן במיון ברירת המחדל הוא לא נענש ב-0 seeds.
+        "relevance": lambda r: r.get("relevance", 0),
+        # Usenet אינו תלוי ב-seeders, לכן במיון לפי זמינות הוא לא נענש ב-0 seeds.
         "seeders": lambda r: (
             bool(r.get("cached")),
             r.get("result_type") == "usenet",
