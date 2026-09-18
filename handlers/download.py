@@ -118,7 +118,14 @@ async def download_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         torbox_id = (data or {}).get("torrent_id") or (data or {}).get("id")
 
     logger.info("[DOWNLOAD] TorBox returned id=%s | type=%s", torbox_id, result_type)
-    await db.log_download(q.from_user.id, r["name"], r["size"], torbox_id, r.get("hash", ""))
+    await db.log_download(
+        q.from_user.id,
+        r["name"],
+        r["size"],
+        torbox_id,
+        r.get("hash", ""),
+        item_type=result_type,
+    )
 
     eta = "מיידית ⚡" if r.get("cached") else "תלוי בגודל ובזמינות המקור"
     await q.edit_message_text(
@@ -240,7 +247,14 @@ async def handle_nzb_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         torbox_id = (data or {}).get("usenetdownload_id") or (data or {}).get("usenet_id") or (data or {}).get("id")
         item_hash = (data or {}).get("hash") or ""
-        await db.log_download(update.effective_user.id, safe_filename, 0, torbox_id, item_hash)
+        await db.log_download(
+            update.effective_user.id,
+            safe_filename,
+            0,
+            torbox_id,
+            item_hash,
+            item_type="usenet",
+        )
         await status.edit_text(
             f"✅ NZB נוסף בהצלחה!\n📋 {fmt.escape(safe_filename[:60])}\n\n"
             "עקוב ב'ההורדות שלי' 📡",
@@ -307,7 +321,14 @@ async def handle_debrid_convert(update: Update, context: ContextTypes.DEFAULT_TY
     torbox_id = (data or {}).get("webdownload_id") or (data or {}).get("data", {}).get("webdownload_id")
     name = (data or {}).get("name") or (data or {}).get("data", {}).get("name") or "WebDL Download"
     logger.info(f"[DEBRID CONVERT] Success: torbox_id={torbox_id} | name={name} | raw_data={data}")
-    await db.log_download(update.effective_user.id, name, 0, torbox_id, "")
+    await db.log_download(
+        update.effective_user.id,
+        name,
+        0,
+        torbox_id,
+        "",
+        item_type="webdl",
+    )
     await status.edit_text(
         f"✅ נוסף בהצלחה להורדות ישירות!\n📋 {fmt.escape(name[:60])}\n\n"
         f"עקוב ב'ההורדות שלי' 📡",
