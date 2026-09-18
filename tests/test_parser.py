@@ -49,6 +49,25 @@ class ParserTests(unittest.TestCase):
         filtered = parser.apply_filters(results, settings, {"source_type": "usenet"})
         self.assertEqual([r["name"] for r in filtered], ["B"])
 
+    def test_relevance_prefers_exact_query_match(self):
+        query = "Example Movie 2026"
+        exact = parser.normalize({
+            "title": "Example Movie 2026 1080p",
+            "result_type": "torrent",
+            "seeders": 10,
+        })
+        noisy = parser.normalize({
+            "title": "Example Collection Movie Pack",
+            "result_type": "torrent",
+            "seeders": 9999,
+        })
+        exact["relevance"] = parser.relevance_score(exact, query)
+        noisy["relevance"] = parser.relevance_score(noisy, query)
+
+        ranked = parser.apply_sort([noisy, exact], "relevance", True)
+        self.assertEqual(ranked[0]["name"], exact["name"])
+
+
 
 if __name__ == "__main__":
     unittest.main()
