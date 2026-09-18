@@ -87,7 +87,7 @@ DEFAULT_SETTINGS = {
     "quality": "all",      # all / 480p / 720p / 1080p / 2160p
     "max_size_gb": 0,      # 0 = ללא הגבלה
     "cached_only": 0,      # 0 = כבוי, 1 = רק תוצאות בקאש
-    "sort_by": "seeders",  # seeders / size / age / cached
+    "sort_by": "relevance",  # relevance / seeders / size / age / cached
     "sort_desc": 1,        # 1 = יורד, 0 = עולה
     "category": "all",     # all / movies / series / games / software / anime / music / books
     "per_page": 5,         # תוצאות בעמוד
@@ -104,8 +104,9 @@ QUALITY_LABELS = {
 
 SIZE_OPTIONS_GB = [0, 1, 2, 5, 10, 30, 50]  # 0 = ללא הגבלה
 
-SORT_OPTIONS = ["seeders", "size", "age", "cached"]
+SORT_OPTIONS = ["relevance", "seeders", "size", "age", "cached"]
 SORT_LABELS = {
+    "relevance": "🎯 רלוונטיות",
     "seeders": "🌱 זרעים", "size": "📦 גודל",
     "age": "📅 תאריך", "cached": "⚡ קאש קודם",
 }
