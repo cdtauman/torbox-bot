@@ -59,9 +59,18 @@ def _extract_hash(release: dict) -> str:
     return match.group(1).lower() if match else ""
 
 
+def _protocol(release: dict) -> str:
+    value = str(release.get("protocol") or "torrent").lower()
+    if value in ("usenet", "1"):
+        return "usenet"
+    return "torrent"
+
+
 def _map_release(release: dict, cached_hashes: dict | None = None) -> dict:
-    thash = _extract_hash(release)
+    protocol = _protocol(release)
+    thash = _extract_hash(release) if protocol == "torrent" else ""
     cached = _is_cached(cached_hashes, thash) if thash else False
+    download_url = release.get("downloadUrl") or ""
 
     return {
         "title": release.get("title") or release.get("sortTitle") or "ללא שם",
@@ -70,8 +79,9 @@ def _map_release(release: dict, cached_hashes: dict | None = None) -> dict:
         "leechers": release.get("leechers") or 0,
         "hash": thash,
         "magnet": release.get("magnetUrl") or "",
-        "download_url": release.get("downloadUrl") or "",
-        "torrent_url": release.get("downloadUrl") or "",
+        "download_url": download_url,
+        "torrent_url": download_url if protocol == "torrent" else "",
+        "nzb_url": download_url if protocol == "usenet" else "",
         "published": release.get("publishDate") or "",
         "tracker": release.get("indexer") or "",
         "indexer": release.get("indexer") or "",
@@ -79,32 +89,9 @@ def _map_release(release: dict, cached_hashes: dict | None = None) -> dict:
         "indexer_id": release.get("indexerId"),
         "cached": cached,
         "source": "prowlarr",
+        "result_type": protocol,
+        "protocol": protocol,
     }
-
-
-def _is_torrent_release(release: dict) -> bool:
-    protocol = release.get("protocol")
-    if protocol is None:
-        return True
-
-    value = str(protocol).lower()
-    # Prowlarr usually serializes this as "torrent"; some clients expose the
-    # Servarr enum number where Torrent is 2.
-    return value in ("torrent", "2")
-
-
-def _is_cached(cache_data, thash: str) -> bool:
-    if not cache_data or not thash:
-        return False
-
-    value = cache_data.get(thash) or cache_data.get(thash.upper())
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, list):
-        return bool(value)
-    if isinstance(value, dict):
-        return bool(value.get("cached") or value.get("is_cached") or value.get("hash"))
-    return bool(value)
 
 
 async def _check_cached(releases: list[dict]) -> dict:
@@ -120,7 +107,7 @@ async def _check_cached(releases: list[dict]) -> dict:
 
 
 async def search(query: str) -> list[dict]:
-    """מחזיר תוצאות גולמיות במבנה ש-parser.normalize יודע לנרמל."""
+    """מחזיר תוצאות Torrent ו-Usenet מ-Prowlarr במבנה אחיד."""
     _require_config()
     timeout = aiohttp.ClientTimeout(total=config.PROWLARR_TIMEOUT)
     params = {
@@ -146,12 +133,42 @@ async def search(query: str) -> list[dict]:
     if not isinstance(data, list):
         raise ProwlarrError("Prowlarr החזיר מבנה תשובה לא צפוי")
 
-    torrent_releases = [r for r in data if _is_torrent_release(r)]
+    allowed = set()
+    if config.SEARCH_INCLUDE_TORRENTS:
+        allowed.add("torrent")
+    if config.SEARCH_INCLUDE_USENET:
+        allowed.add("usenet")
+
+    releases = [r for r in data if _protocol(r) in allowed]
+    torrent_releases = [r for r in releases if _protocol(r) == "torrent"]
     cached_hashes = await _check_cached(torrent_releases)
-    results = [_map_release(r, cached_hashes) for r in torrent_releases]
-    results.sort(key=lambda r: r.get("seeders") or 0, reverse=True)
-    logger.info("[PROWLARR] query=%r results=%s", query, len(results))
+
+    results = [_map_release(r, cached_hashes) for r in releases]
+    logger.info(
+        "[PROWLARR] query=%r results=%s torrents=%s usenet=%s",
+        query,
+        len(results),
+        sum(1 for r in results if r["result_type"] == "torrent"),
+        sum(1 for r in results if r["result_type"] == "usenet"),
+    )
     return results[:config.SEARCH_LIMIT]
+
+
+async def fetch_nzb(download_url: str) -> tuple[str, bytes]:
+    """מוריד NZB דרך Prowlarr כדי להעביר אותו ל-TorBox."""
+    _require_config()
+    if not download_url:
+        raise ProwlarrError("לתוצאת Usenet אין קישור NZB להורדה")
+
+    timeout = aiohttp.ClientTimeout(total=config.PROWLARR_TIMEOUT)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.get(_absolute_url(download_url), headers=_headers(), allow_redirects=True) as resp:
+            data = await resp.read()
+            if resp.status != 200:
+                detail = data.decode("utf-8", errors="replace")[:300]
+                raise ProwlarrError(f"לא הצלחתי להוריד NZB מ-Prowlarr: {detail or resp.status}")
+            filename = _filename_from_headers(resp.headers, default="prowlarr-result.nzb", suffix=".nzb")
+            return filename, data
 
 
 async def fetch_torrent(download_url: str) -> tuple[str, bytes]:
@@ -196,13 +213,13 @@ def _absolute_url(url: str) -> str:
     return _base_url(url)
 
 
-def _filename_from_headers(headers) -> str:
+def _filename_from_headers(headers, default="prowlarr-result.torrent", suffix=".torrent") -> str:
     disposition = headers.get("Content-Disposition", "")
     match = re.search(r'filename="?([^";]+)"?', disposition)
     if match:
         filename = match.group(1).strip()
-        return filename if filename.lower().endswith(".torrent") else f"{filename}.torrent"
-    return ""
+        return filename if filename.lower().endswith(suffix) else f"{filename}{suffix}"
+    return default
 
 
 def _error_detail(data) -> str:
