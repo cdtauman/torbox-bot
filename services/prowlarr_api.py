@@ -168,6 +168,63 @@ async def search(query: str) -> list[dict]:
     return results[:config.SEARCH_LIMIT]
 
 
+def _download_headers(url: str) -> dict:
+    """Headers להורדה; מפתח Prowlarr נשלח רק ל-origin המוגדר."""
+    headers = {
+        "Accept": "*/*",
+        "User-Agent": "torbox-bot/1.0",
+    }
+    parsed = urlparse(url)
+    base = urlparse(config.PROWLARR_URL)
+    if (
+        parsed.scheme.lower() == base.scheme.lower()
+        and parsed.netloc.lower() == base.netloc.lower()
+    ):
+        headers["X-Api-Key"] = config.PROWLARR_API_KEY
+    return headers
+
+
+def _redirect_url(current_url: str, location: str) -> str:
+    """מנרמל redirect; aliases מקומיים חוזרים ל-origin המוגדר."""
+    if not location:
+        raise ProwlarrError("Prowlarr החזיר redirect ללא Location")
+    if location.lower().startswith("magnet:"):
+        return location
+
+    candidate = urljoin(current_url, location)
+    parsed = urlparse(candidate)
+    if parsed.scheme.lower() not in ("http", "https") or not parsed.hostname:
+        raise ProwlarrError("Prowlarr החזיר redirect לא תקין")
+
+    base = urlparse(config.PROWLARR_URL)
+    local_aliases = {"127.0.0.1", "localhost", "prowlarr"}
+    if (parsed.hostname or "").lower() in ({(base.hostname or "").lower()} | local_aliases):
+        return _absolute_url(candidate)
+
+    # Redirect חיצוני יכול להיות יעד ההורדה של ה-indexer,
+    # אך לעולם לא יקבל את X-Api-Key של Prowlarr.
+    return candidate
+
+
+async def _fetch_download_bytes(session, download_url: str):
+    """מוריד קובץ עם redirects ידניים כדי לא לדלוף API key."""
+    current_url = _absolute_url(download_url)
+    for _ in range(5):
+        async with session.get(
+            current_url,
+            headers=_download_headers(current_url),
+            allow_redirects=False,
+        ) as resp:
+            if resp.status in (301, 302, 303, 307, 308):
+                current_url = _redirect_url(current_url, resp.headers.get("Location", ""))
+                if current_url.lower().startswith("magnet:"):
+                    raise MagnetRedirect(current_url)
+                continue
+            return resp.status, resp.headers, str(resp.url), await resp.read()
+
+    raise ProwlarrError("יותר מדי redirects בזמן הורדה דרך Prowlarr")
+
+
 async def fetch_nzb(download_url: str) -> tuple[str, bytes]:
     """מוריד NZB דרך Prowlarr כדי להעביר אותו ל-TorBox."""
     _require_config()
@@ -176,16 +233,19 @@ async def fetch_nzb(download_url: str) -> tuple[str, bytes]:
 
     timeout = aiohttp.ClientTimeout(total=config.PROWLARR_TIMEOUT)
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.get(_absolute_url(download_url), headers=_headers(), allow_redirects=True) as resp:
-            data = await resp.read()
-            if resp.status != 200:
-                detail = data.decode("utf-8", errors="replace")[:300]
-                raise ProwlarrError(f"לא הצלחתי להוריד NZB מ-Prowlarr: {detail or resp.status}")
-            preview = data[:4096].lower()
-            if b"<nzb" not in preview and b"<?xml" not in preview:
-                raise ProwlarrError("Prowlarr לא החזיר קובץ NZB תקין")
-            filename = _filename_from_headers(resp.headers, default="prowlarr-result.nzb", suffix=".nzb")
-            return filename, data
+        status, headers, _, data = await _fetch_download_bytes(session, download_url)
+        if status != 200:
+            detail = data.decode("utf-8", errors="replace")[:300]
+            raise ProwlarrError(f"לא הצלחתי להוריד NZB מ-Prowlarr: {detail or status}")
+        preview = data[:4096].lower()
+        if b"<nzb" not in preview and b"<?xml" not in preview:
+            raise ProwlarrError("Prowlarr לא החזיר קובץ NZB תקין")
+        filename = _filename_from_headers(
+            headers,
+            default="prowlarr-result.nzb",
+            suffix=".nzb",
+        )
+        return filename, data
 
 
 async def fetch_torrent(download_url: str) -> tuple[str, bytes]:
@@ -194,34 +254,34 @@ async def fetch_torrent(download_url: str) -> tuple[str, bytes]:
     if not download_url:
         raise ProwlarrError("לתוצאה אין קישור torrent להורדה")
 
-    # If the download URL itself is already a magnet link, raise immediately
     if download_url.lower().startswith("magnet:"):
         raise MagnetRedirect(download_url)
 
     timeout = aiohttp.ClientTimeout(total=config.PROWLARR_TIMEOUT)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         try:
-            async with session.get(_absolute_url(download_url), headers=_headers(), allow_redirects=True) as resp:
-                final_url = str(resp.url)
-                if final_url.startswith("magnet:"):
-                    raise MagnetRedirect(final_url)
-
-                data = await resp.read()
-                if resp.status != 200:
-                    detail = data.decode("utf-8", errors="replace")[:300]
-                    raise ProwlarrError(f"לא הצלחתי להוריד torrent מ-Prowlarr: {detail or resp.status}")
-
-                filename = _filename_from_headers(resp.headers) or "prowlarr-result.torrent"
-                return filename, data
+            status, headers, _, data = await _fetch_download_bytes(session, download_url)
+            if status != 200:
+                detail = data.decode("utf-8", errors="replace")[:300]
+                raise ProwlarrError(
+                    f"לא הצלחתי להוריד torrent מ-Prowlarr: {detail or status}"
+                )
+            filename = _filename_from_headers(headers) or "prowlarr-result.torrent"
+            return filename, data
         except MagnetRedirect:
+            raise
+        except ProwlarrError:
             raise
         except Exception as e:
             err_msg = str(e)
-            match = re.search(r'(magnet:\?xt=urn:btih:[^\s\'"\>]+)', err_msg, re.IGNORECASE)
+            match = re.search(
+                r'(magnet:\\?xt=urn:btih:[^\\s\\\'\"\\>]+)',
+                err_msg,
+                re.IGNORECASE,
+            )
             if match:
                 raise MagnetRedirect(match.group(1))
             raise ProwlarrError(f"לא הצלחתי להוריד torrent מ-Prowlarr: {e}")
-
 
 def _absolute_url(url: str) -> str:
     """
