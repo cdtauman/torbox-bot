@@ -10,26 +10,27 @@ from handlers.auth import get_role, is_admin, require_role
 from services import keyboards as kb
 
 WELCOME = (
-    "🎬 <b>ברוך הבא ל-TorBox Bot!</b>\n\n"
-    "חיפוש והורדת טורנטים ישירות דרך TorBox —\n"
-    "פשוט, מהיר, והכל בלחיצת כפתור.\n\n"
-    "מה תרצה לעשות?"
+    "🔎 <b>TorBox Bot</b>\n\n"
+    "חיפוש מאוחד ב-Torrent וב-Usenet, הורדה דרך TorBox,\n"
+    "ומעקב אחר הכל במקום אחד.\n\n"
+    "פשוט לחץ על <b>🔍 חיפוש</b> או שלח שם ישירות."
 )
 
 HELP = (
     "ℹ️ <b>איך משתמשים בבוט?</b>\n\n"
-    "🔍 <b>חיפוש:</b>\n"
-    "פשוט שלח שם של סרט / סדרה / משחק / תוכנה,\n"
-    "ואני אחפש בכל המקורות של TorBox.\n\n"
-    "אפשר גם לשלוח ישירות:\n"
+    "🔍 <b>חיפוש מאוחד:</b> שלח שם והבוט מחפש ב-Torrent + Usenet.\n"
+    "כדאי להוסיף שנה, עונה/פרק או איכות כשצריך.\n\n"
+    "📎 <b>אפשר לשלוח ישירות:</b>\n"
     "• קישור <b>magnet</b>\n"
-    "• קובץ <b>.torrent</b>\n\n"
-    "🔽 <b>סינון:</b> לפי איכות, גודל, קטגוריה, זמינות בקאש\n"
-    "🔃 <b>מיון:</b> לפי זרעים, גודל, תאריך\n"
-    "⚡ <b>קאש:</b> תוצאות עם ⚡ זמינות להורדה מיידית\n\n"
-    "📡 <b>ההורדות שלי:</b> מעקב בזמן אמת + קישורי הורדה\n"
-    "⚙️ <b>הגדרות:</b> התאמה אישית של ברירות המחדל\n"
+    "• קובץ <b>.torrent</b>\n"
+    "• קובץ <b>.nzb</b>\n\n"
+    "🔽 <b>סינון:</b> איכות, גודל, קטגוריה, מקור וזמינות בקאש\n"
+    "🔃 <b>מיון:</b> זמינות/זרעים, גודל ותאריך\n"
+    "📡 <b>ההורדות שלי:</b> Torrent, Usenet ו-WebDL במסך אחד\n"
+    "🔗 <b>קישור ישיר:</b> הוספת URL שנתמך על ידי TorBox\n"
+    "⚙️ <b>הגדרות:</b> ברירות מחדל אישיות\n"
 )
+
 
 
 def clear_user_states(context):
@@ -132,10 +133,9 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_debrid_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     clear_user_states(context)
     text = (
-        "📥 <b>חיפוש והורדה ישירה (Debrid)</b>\n\n"
-        "בחר אפשרות:\n"
-        "• <b>חיפוש לפי שם (נסיוני):</b> יחפש הורדות ישירות ל-Rapidgator באתר RLSBB.\n"
-        "• <b>המרת קישור:</b> שלח קישור פרימיום שיש לך (למשל Rapidgator) כדי להמיר אותו מיד דרך TorBox."
+        "🔗 <b>קישור ישיר</b>\n\n"
+        "אפשר להדביק קישור שנתמך על ידי TorBox ולהוסיף אותו להורדות.\n"
+        "קיים גם חיפוש WebDL ניסיוני כמקור משלים."
     )
     if update.callback_query:
         await update.callback_query.answer()
