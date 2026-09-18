@@ -380,7 +380,11 @@ async def _try_send_direct_link(message, torbox_id, user_id, is_webdl=False, is_
                     text,
                     parse_mode="HTML", disable_web_page_preview=True
                 )
-                await db.mark_download_by_torbox_id_as_notified(torbox_id, user_id)
+                await db.mark_download_by_torbox_id_as_notified(
+                    torbox_id,
+                    user_id,
+                    item_type="webdl" if is_webdl else "usenet" if is_usenet else "torrent",
+                )
                 return
         except Exception:
             pass
@@ -471,7 +475,8 @@ async def _handle_already_queued(user_id, name: str, thash: str, is_webdl: bool 
         finished = found_item.get("download_finished") or found_item.get("download_present") or found_item.get("download_state") == "completed" or pct >= 100
 
         # רישום ההורדה עבור משתמש זה במסד הנתונים כדי שיקבל התראה כשתסתיים
-        if not await db.is_download_logged(user_id, tid):
+        duplicate_type = "webdl" if is_webdl else "torrent"
+        if not await db.is_download_logged(user_id, tid, duplicate_type):
             await db.log_download(
                 user_id,
                 found_item.get("name") or name or "Download",
